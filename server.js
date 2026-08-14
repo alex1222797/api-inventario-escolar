@@ -17,10 +17,12 @@ app.use(cors());
 // =====================================================
 
 const conexion = mysql.createConnection({
-  host: "localhost",
-  user: "root",
-  password: "mySQL123",
-  database: "restaurante_db",
+  host: process.env.DB_HOST || "localhost",
+  user: process.env.DB_USER || "root",
+  password: process.env.DB_PASSWORD || "mySQL123",
+  database: process.env.DB_NAME || "restaurante_db",
+  port: process.env.DB_PORT || 3306,
+  ssl: { rejectUnauthorized: false },
 });
 
 conexion.connect((err) => {
@@ -939,11 +941,12 @@ app.get("/export/excel", async (req, res) => {
 // INICIAR SERVIDOR
 // =====================================================
 
-app.listen(3000, "0.0.0.0", () => {
+const PORT = process.env.PORT || 3000;
+
+app.listen(PORT, "0.0.0.0", () => {
   console.log("--------------------------------------");
   console.log(" RESTAURANTE API");
   console.log("--------------------------------------");
-  console.log("Servidor iniciado en puerto 3000");
-  console.log("API: http://localhost:3000");
+  console.log(`Servidor iniciado en puerto ${PORT}`);
   console.log("--------------------------------------");
 });
