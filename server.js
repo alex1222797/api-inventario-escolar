@@ -591,10 +591,18 @@ app.get("/reportes/masvendido", (req, res) => {
 // Este endpoint crea la orden, su detalle, y devuelve un
 // bloque "notificacion" que Flutter usa para disparar el
 // aviso local con flutter_local_notifications.
+//
+// NUEVO: soporte de "cliente_id"
+// - Si quien confirma es un Cliente, la orden queda asociada
+//   a sí mismo automáticamente.
+// - Si quien confirma es un Mesero, DEBE mandar "cliente_id"
+//   (el cliente que seleccionó en el carrito) para que la
+//   orden quede registrada a nombre de ese cliente.
+// - Si es Administrador, cliente_id es opcional.
 // =====================================================
 
 app.post("/ordenes", (req, res) => {
-  const { total, detalle, usuario_id } = req.body;
+  const { total, detalle, usuario_id, cliente_id } = req.body;
 
   if (!usuario_id) {
     return res.status(400).json({
@@ -634,80 +642,133 @@ app.post("/ordenes", (req, res) => {
       });
     }
 
-    const sqlOrden = `
-      INSERT INTO ordenes
-      (total, usuario_id)
-      VALUES (?, ?)
-    `;
+    const usuario = usuarioResult[0];
+    let clienteIdFinal = null;
 
-    conexion.query(sqlOrden, [total, usuario_id], (err, result) => {
-      if (err) {
-        console.error(err);
-
-        return res.status(500).json({
+    if (usuario.rol === "Cliente") {
+      // El cliente se atiende a sí mismo
+      clienteIdFinal = usuario.id;
+    } else if (usuario.rol === "Mesero") {
+      if (!cliente_id) {
+        return res.status(400).json({
           status: "error",
-          mensaje: "Error al crear la orden",
+          mensaje: "El mesero debe seleccionar a qué cliente atiende",
         });
       }
+      clienteIdFinal = cliente_id;
+    } else {
+      // Administrador u otro rol: cliente_id es opcional
+      clienteIdFinal = cliente_id || null;
+    }
 
-      const ordenId = result.insertId;
-
-      const sqlDetalle = `
-        INSERT INTO detalle_orden
-        (orden_id, platillo_id, cantidad, subtotal)
-        VALUES (?, ?, ?, ?)
+    const registrarOrden = () => {
+      const sqlOrden = `
+        INSERT INTO ordenes
+        (total, usuario_id, cliente_id)
+        VALUES (?, ?, ?)
       `;
 
-      let pendientes = detalle.length;
-      let huboError = false;
+      conexion.query(sqlOrden, [total, usuario_id, clienteIdFinal], (err, result) => {
+        if (err) {
+          console.error(err);
 
-      detalle.forEach((d) => {
-        conexion.query(
-          sqlDetalle,
-          [ordenId, d.platillo_id, d.cantidad, d.subtotal],
-          (errDetalle) => {
-            pendientes--;
+          return res.status(500).json({
+            status: "error",
+            mensaje: "Error al crear la orden",
+          });
+        }
 
-            if (errDetalle) {
-              huboError = true;
-              console.error(errDetalle);
-            }
+        const ordenId = result.insertId;
 
-            if (pendientes === 0) {
-              if (huboError) {
-                return res.json({
-                  status: "error",
-                  mensaje:
-                    "La orden se creó pero hubo un error en el detalle",
-                  ordenId: ordenId,
-                });
+        const sqlDetalle = `
+          INSERT INTO detalle_orden
+          (orden_id, platillo_id, cantidad, subtotal)
+          VALUES (?, ?, ?, ?)
+        `;
+
+        let pendientes = detalle.length;
+        let huboError = false;
+
+        detalle.forEach((d) => {
+          conexion.query(
+            sqlDetalle,
+            [ordenId, d.platillo_id, d.cantidad, d.subtotal],
+            (errDetalle) => {
+              pendientes--;
+
+              if (errDetalle) {
+                huboError = true;
+                console.error(errDetalle);
               }
 
-              // Evento que dispara la notificación en el cliente
-              console.log(
-                `🔔 EVENTO: Nueva orden #${ordenId} registrada por un total de $${total}`
-              );
+              if (pendientes === 0) {
+                if (huboError) {
+                  return res.json({
+                    status: "error",
+                    mensaje:
+                      "La orden se creó pero hubo un error en el detalle",
+                    ordenId: ordenId,
+                  });
+                }
 
-              res.json({
-                status: "ok",
-                mensaje: "Orden registrada",
-                ordenId: ordenId,
-                notificacion: {
-                  titulo: "¡Nueva Orden Registrada!",
-                  cuerpo: `La orden #${ordenId} fue registrada por un total de $${total}.`,
-                },
-              });
+                // Evento que dispara la notificación en el cliente
+                console.log(
+                  `🔔 EVENTO: Nueva orden #${ordenId} registrada por un total de $${total}`
+                );
+
+                res.json({
+                  status: "ok",
+                  mensaje: "Orden registrada",
+                  ordenId: ordenId,
+                  notificacion: {
+                    titulo: "¡Nueva Orden Registrada!",
+                    cuerpo: `La orden #${ordenId} fue registrada por un total de $${total}.`,
+                  },
+                });
+              }
             }
-          }
-        );
+          );
+        });
       });
-    });
+    };
+
+    // Si viene cliente_id (mesero o admin), validamos que exista y sea Cliente
+    if (clienteIdFinal && usuario.rol !== "Cliente") {
+      const sqlCliente = `
+        SELECT id, rol
+        FROM usuarios
+        WHERE id = ?
+        LIMIT 1
+      `;
+
+      conexion.query(sqlCliente, [clienteIdFinal], (errCliente, clienteResult) => {
+        if (errCliente) {
+          console.error(errCliente);
+          return res.status(500).json({
+            status: "error",
+            mensaje: "Error al verificar el cliente",
+          });
+        }
+
+        if (clienteResult.length === 0 || clienteResult[0].rol !== "Cliente") {
+          return res.status(400).json({
+            status: "error",
+            mensaje: "El cliente seleccionado no es válido",
+          });
+        }
+
+        registrarOrden();
+      });
+    } else {
+      registrarOrden();
+    }
   });
 });
 
 // =====================================================
 // GUÍA 17
 // REPORTES POR MESERO
+// (se basa en usuario_id: quién tomó/confirmó la orden)
 // =====================================================
 
 app.get("/reportes/mesero/:id", (req, res) => {
@@ -746,6 +807,9 @@ app.get("/reportes/mesero/:id", (req, res) => {
 // =====================================================
 // GUÍA 17
 // REPORTES POR CLIENTE
+// NUEVO: ahora filtra por o.cliente_id, así que aparecen
+// tanto las órdenes que el cliente confirmó él mismo como
+// las que un mesero registró en su nombre.
 // =====================================================
 
 app.get("/reportes/cliente/:id", (req, res) => {
@@ -756,14 +820,15 @@ app.get("/reportes/cliente/:id", (req, res) => {
       o.id,
       o.fecha,
       o.total,
-      u.id AS usuario_id,
-      u.usuario,
-      u.rol
+      um.usuario AS mesero,
+      uc.id AS cliente_id,
+      uc.usuario AS cliente
     FROM ordenes o
-    JOIN usuarios u
-      ON o.usuario_id = u.id
-    WHERE u.id = ?
-      AND u.rol = 'Cliente'
+    LEFT JOIN usuarios um
+      ON o.usuario_id = um.id
+    LEFT JOIN usuarios uc
+      ON o.cliente_id = uc.id
+    WHERE o.cliente_id = ?
     ORDER BY o.fecha DESC
   `;
 
@@ -793,12 +858,15 @@ app.get("/historial", (req, res) => {
       o.total,
       u.usuario,
       u.rol,
+      uc.usuario AS cliente,
       p.nombre,
       d.cantidad,
       d.subtotal
     FROM ordenes o
     JOIN usuarios u
       ON o.usuario_id = u.id
+    LEFT JOIN usuarios uc
+      ON o.cliente_id = uc.id
     JOIN detalle_orden d
       ON o.id = d.orden_id
     JOIN platillos p
@@ -824,7 +892,8 @@ app.get("/historial", (req, res) => {
 // ESTADÍSTICAS
 // =====================================================
 
-// Ventas por mesero
+// Ventas por mesero (se mantiene igual: basado en usuario_id,
+// es decir, quién tomó/confirmó la orden)
 app.get("/estadisticas/meseros", (req, res) => {
   const sql = `
     SELECT u.usuario, SUM(o.total) AS ventas
@@ -849,11 +918,14 @@ app.get("/estadisticas/meseros", (req, res) => {
 });
 
 // Pedidos por cliente
+// NUEVO: ahora agrupa por o.cliente_id, así que cuenta tanto
+// los pedidos que el cliente confirmó él mismo como los que
+// un mesero registró en su nombre.
 app.get("/estadisticas/clientes", (req, res) => {
   const sql = `
     SELECT u.usuario, COUNT(o.id) AS pedidos
     FROM ordenes o
-    JOIN usuarios u ON o.usuario_id = u.id
+    JOIN usuarios u ON o.cliente_id = u.id
     WHERE u.rol = 'Cliente'
     GROUP BY u.usuario
   `;
