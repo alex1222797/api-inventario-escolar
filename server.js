@@ -186,7 +186,47 @@ app.post("/login", (req, res) => {
         }
     );
 });
+app.post("/prestamos", (req, res) => {
+  const {
+    material_id,
+    fecha_prestamo,
+    fecha_devolucion,
+    maestro
+  } = req.body;
 
+  if (!material_id || !fecha_prestamo || !maestro) {
+    return res.status(400).json({
+      status: "error",
+      mensaje: "Faltan datos obligatorios"
+    });
+  }
+
+  const sql = `
+    INSERT INTO prestamos
+    (material_id, fecha_prestamo, fecha_devolucion, maestro)
+    VALUES (?, ?, ?, ?)
+  `;
+
+  conexion.query(
+    sql,
+    [material_id, fecha_prestamo, fecha_devolucion, maestro],
+    (err, result) => {
+
+      if (err) {
+        return res.status(500).json({
+          status: "error",
+          mensaje: err.message
+        });
+      }
+
+      res.json({
+        status: "ok",
+        mensaje: "Préstamo registrado",
+        id: result.insertId
+      });
+    }
+  );
+});
 
 // =====================================================
 // INICIAR SERVIDOR
