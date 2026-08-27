@@ -13,7 +13,7 @@
 
 app.post("/prestamos", (req, res) => {
 
-    // Extraemos los datos enviados en formato JSON.
+    // Extraemos los datos enviados por Flutter.
     const {
         material_id,
         fecha_prestamo,
@@ -24,7 +24,6 @@ app.post("/prestamos", (req, res) => {
 
     // Validamos los campos obligatorios.
     if (!material_id || !fecha_prestamo || !maestro) {
-
         return res.status(400).json({
             status: "error",
             mensaje: "Faltan datos obligatorios"
@@ -45,17 +44,13 @@ app.post("/prestamos", (req, res) => {
         [
             material_id,
             fecha_prestamo,
-            fecha_devolucion,
+            fecha_devolucion || null,
             maestro
         ],
         (err, result) => {
 
             if (err) {
-
-                console.error(
-                    "Error registrando préstamo:",
-                    err
-                );
+                console.error("Error registrando préstamo:", err);
 
                 return res.status(500).json({
                     status: "error",
@@ -64,7 +59,7 @@ app.post("/prestamos", (req, res) => {
             }
 
 
-            res.json({
+            return res.status(201).json({
                 status: "ok",
                 mensaje: "Préstamo registrado",
                 id: result.insertId
