@@ -19,42 +19,21 @@ const app = express();
 // MIDDLEWARES
 // =====================================================
 
-// Permite recibir datos JSON desde Flutter.
 app.use(bodyParser.json());
-
-// Permite peticiones desde otras aplicaciones.
 app.use(cors());
 
 
 // =====================================================
 // CONEXIÓN A AIVEN MYSQL
 // =====================================================
-//
-// process.env significa:
-// "buscar este dato en las variables de entorno".
-//
-// Las credenciales estarán guardadas en Render.
-// Así no publicamos contraseñas en GitHub.
-//
 
 const conexion = mysql.createConnection({
-
-    // Host de Aiven.
     host: process.env.DB_HOST,
-
-    // Usuario de Aiven.
     user: process.env.DB_USER,
-
-    // Contraseña de Aiven.
     password: process.env.DB_PASSWORD,
-
-    // Base de datos.
     database: process.env.DB_NAME,
-
-    // Puerto de Aiven.
     port: Number(process.env.DB_PORT),
 
-    // Aiven utiliza SSL.
     ssl: {
         rejectUnauthorized: false
     }
@@ -66,7 +45,6 @@ const conexion = mysql.createConnection({
 // =====================================================
 
 conexion.connect((err) => {
-
     if (err) {
         console.error("Error al conectar con Aiven:", err);
         return;
@@ -79,56 +57,38 @@ conexion.connect((err) => {
 // =====================================================
 // RUTA PRINCIPAL
 // =====================================================
-//
-// Sirve para comprobar que la API está funcionando.
-//
 
 app.get("/", (req, res) => {
-
     return res.json({
         status: "ok",
         mensaje: "Inventario API funcionando"
     });
-
 });
 
 
 // =====================================================
 // REGISTRAR MATERIAL
 // =====================================================
-//
-// Flutter enviará:
-//
-// nombre
-// cantidad
-// estado
-//
 
 app.post("/materiales", (req, res) => {
-
     const {
         nombre,
         cantidad,
         estado
     } = req.body;
 
-
-    // Validamos campos obligatorios.
     if (!nombre || cantidad === undefined || !estado) {
-
         return res.status(400).json({
             status: "error",
             mensaje: "Faltan datos obligatorios"
         });
     }
 
-
     const sql = `
         INSERT INTO materiales
         (nombre, cantidad, estado)
         VALUES (?, ?, ?)
     `;
-
 
     conexion.query(
         sql,
@@ -138,9 +98,7 @@ app.post("/materiales", (req, res) => {
             estado
         ],
         (err, result) => {
-
             if (err) {
-
                 console.error(
                     "Error registrando material:",
                     err
@@ -152,7 +110,6 @@ app.post("/materiales", (req, res) => {
                 });
             }
 
-
             return res.status(201).json({
                 status: "ok",
                 mensaje: "Material registrado",
@@ -160,20 +117,14 @@ app.post("/materiales", (req, res) => {
             });
         }
     );
-
 });
 
 
 // =====================================================
 // OBTENER MATERIALES
 // =====================================================
-//
-// Esta ruta servirá después para llenar un Dropdown
-// en Flutter con los materiales disponibles.
-//
 
 app.get("/materiales", (req, res) => {
-
     const sql = `
         SELECT
             id,
@@ -184,62 +135,43 @@ app.get("/materiales", (req, res) => {
         ORDER BY nombre ASC
     `;
 
+    conexion.query(sql, (err, result) => {
+        if (err) {
+            console.error(
+                "Error obteniendo materiales:",
+                err
+            );
 
-    conexion.query(
-        sql,
-        (err, result) => {
-
-            if (err) {
-
-                console.error(
-                    "Error obteniendo materiales:",
-                    err
-                );
-
-                return res.status(500).json({
-                    status: "error",
-                    mensaje: "Error al obtener materiales"
-                });
-            }
-
-
-            return res.json({
-                status: "ok",
-                materiales: result
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al obtener materiales"
             });
         }
-    );
 
+        return res.json({
+            status: "ok",
+            materiales: result
+        });
+    });
 });
 
 
 // =====================================================
 // LOGIN
 // =====================================================
-//
-// Flutter enviará:
-//
-// usuario
-// clave
-//
 
 app.post("/login", (req, res) => {
-
     const {
         usuario,
         clave
     } = req.body;
 
-
-    // Validamos los datos.
     if (!usuario || !clave) {
-
         return res.status(400).json({
             status: "fail",
             mensaje: "Usuario y contraseña son obligatorios"
         });
     }
-
 
     const sql = `
         SELECT
@@ -252,7 +184,6 @@ app.post("/login", (req, res) => {
         LIMIT 1
     `;
 
-
     conexion.query(
         sql,
         [
@@ -260,9 +191,7 @@ app.post("/login", (req, res) => {
             clave
         ],
         (err, result) => {
-
             if (err) {
-
                 console.error(
                     "Error en login:",
                     err
@@ -274,19 +203,14 @@ app.post("/login", (req, res) => {
                 });
             }
 
-
-            // No se encontró el usuario.
             if (result.length === 0) {
-
                 return res.status(401).json({
                     status: "fail",
                     mensaje: "Credenciales incorrectas"
                 });
             }
 
-
             const usuarioEncontrado = result[0];
-
 
             return res.json({
                 status: "ok",
@@ -296,24 +220,14 @@ app.post("/login", (req, res) => {
             });
         }
     );
-
 });
 
 
 // =====================================================
 // REGISTRAR PRÉSTAMO
 // =====================================================
-//
-// Flutter enviará:
-//
-// material_id
-// fecha_prestamo
-// fecha_devolucion
-// maestro
-//
 
 app.post("/prestamos", (req, res) => {
-
     const {
         material_id,
         fecha_prestamo,
@@ -321,16 +235,12 @@ app.post("/prestamos", (req, res) => {
         maestro
     } = req.body;
 
-
-    // fecha_devolucion puede ser null.
     if (!material_id || !fecha_prestamo || !maestro) {
-
         return res.status(400).json({
             status: "error",
             mensaje: "Faltan datos obligatorios"
         });
     }
-
 
     const sql = `
         INSERT INTO prestamos
@@ -343,7 +253,6 @@ app.post("/prestamos", (req, res) => {
         VALUES (?, ?, ?, ?)
     `;
 
-
     conexion.query(
         sql,
         [
@@ -353,9 +262,7 @@ app.post("/prestamos", (req, res) => {
             maestro
         ],
         (err, result) => {
-
             if (err) {
-
                 console.error(
                     "Error registrando préstamo:",
                     err
@@ -367,7 +274,6 @@ app.post("/prestamos", (req, res) => {
                 });
             }
 
-
             return res.status(201).json({
                 status: "ok",
                 mensaje: "Préstamo registrado",
@@ -375,20 +281,14 @@ app.post("/prestamos", (req, res) => {
             });
         }
     );
-
 });
 
 
 // =====================================================
-// OBTENER PRÉSTAMOS
+// OBTENER PRÉSTAMOS CON NOMBRE DEL MATERIAL
 // =====================================================
-//
-// Devuelve los préstamos registrados junto con
-// el nombre del material.
-//
 
 app.get("/prestamos", (req, res) => {
-
     const sql = `
         SELECT
             p.id,
@@ -403,32 +303,158 @@ app.get("/prestamos", (req, res) => {
         ORDER BY p.id DESC
     `;
 
+    conexion.query(sql, (err, result) => {
+        if (err) {
+            console.error(
+                "Error obteniendo préstamos:",
+                err
+            );
+
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al obtener préstamos"
+            });
+        }
+
+        return res.json({
+            status: "ok",
+            prestamos: result
+        });
+    });
+});
+
+
+// =====================================================
+// ACTUALIZAR FECHA DE DEVOLUCIÓN
+// =====================================================
+//
+// Ejemplo:
+// PUT /prestamos/1
+//
+// Body:
+// {
+//     "fecha_devolucion": "2026-08-31 15:30:00"
+// }
+//
+
+app.put("/prestamos/:id", (req, res) => {
+    const {
+        fecha_devolucion
+    } = req.body;
+
+    const idPrestamo = Number(req.params.id);
+
+    if (!Number.isInteger(idPrestamo) || idPrestamo <= 0) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "El ID del préstamo no es válido"
+        });
+    }
+
+    if (!fecha_devolucion) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "La fecha de devolución es obligatoria"
+        });
+    }
+
+    const sql = `
+        UPDATE prestamos
+        SET fecha_devolucion = ?
+        WHERE id = ?
+    `;
 
     conexion.query(
         sql,
+        [
+            fecha_devolucion,
+            idPrestamo
+        ],
         (err, result) => {
-
             if (err) {
-
                 console.error(
-                    "Error obteniendo préstamos:",
+                    "Error actualizando préstamo:",
                     err
                 );
 
                 return res.status(500).json({
                     status: "error",
-                    mensaje: "Error al obtener préstamos"
+                    mensaje: "Error al actualizar el préstamo"
                 });
             }
 
+            if (result.affectedRows === 0) {
+                return res.status(404).json({
+                    status: "error",
+                    mensaje: "Préstamo no encontrado"
+                });
+            }
 
             return res.json({
                 status: "ok",
-                prestamos: result
+                mensaje: "Préstamo actualizado"
             });
         }
     );
+});
 
+
+// =====================================================
+// MARCAR MATERIAL COMO DEVUELTO
+// =====================================================
+//
+// Ejemplo:
+// PUT /prestamos/devolver/1
+//
+// No necesita body.
+// MySQL colocará automáticamente la fecha y hora actual.
+//
+
+app.put("/prestamos/devolver/:id", (req, res) => {
+    const idPrestamo = Number(req.params.id);
+
+    if (!Number.isInteger(idPrestamo) || idPrestamo <= 0) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "El ID del préstamo no es válido"
+        });
+    }
+
+    const sql = `
+        UPDATE prestamos
+        SET fecha_devolucion = NOW()
+        WHERE id = ?
+    `;
+
+    conexion.query(
+        sql,
+        [idPrestamo],
+        (err, result) => {
+            if (err) {
+                console.error(
+                    "Error marcando devolución:",
+                    err
+                );
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "Error al marcar la devolución"
+                });
+            }
+
+            if (result.affectedRows === 0) {
+                return res.status(404).json({
+                    status: "error",
+                    mensaje: "Préstamo no encontrado"
+                });
+            }
+
+            return res.json({
+                status: "ok",
+                mensaje: "Material devuelto"
+            });
+        }
+    );
 });
 
 
@@ -437,41 +463,23 @@ app.get("/prestamos", (req, res) => {
 // =====================================================
 
 app.use((req, res) => {
-
     return res.status(404).json({
         status: "error",
         mensaje: "Ruta no encontrada"
     });
-
 });
-
 
 
 // =====================================================
 // INICIAR SERVIDOR
 // =====================================================
-//
-// En la PC:
-// puerto 3000.
-//
-// En Render:
-// process.env.PORT tendrá el puerto asignado,
-// normalmente 10000.
-//
 
 const PORT = process.env.PORT || 3000;
 
-
-app.listen(
-    PORT,
-    "0.0.0.0",
-    () => {
-
-        console.log("--------------------------------");
-        console.log(" INVENTARIO API");
-        console.log("--------------------------------");
-        console.log(`Servidor iniciado en puerto ${PORT}`);
-        console.log("--------------------------------");
-
-    }
-);
+app.listen(PORT, "0.0.0.0", () => {
+    console.log("--------------------------------");
+    console.log(" INVENTARIO API");
+    console.log("--------------------------------");
+    console.log(`Servidor iniciado en puerto ${PORT}`);
+    console.log("--------------------------------");
+});
