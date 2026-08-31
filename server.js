@@ -444,16 +444,7 @@ app.use((req, res) => {
     });
 
 });
-app.get("/prestamos", (req, res) => {
-const sql = "SELECT * FROM prestamos";
-conexion.query(sql, (err, result) => {
-if (err) {
-res.json({ status: "error", mensaje: err });
-} else {
-res.json(result);
-}
-});
-});
+
 
 
 // =====================================================
