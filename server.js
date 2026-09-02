@@ -457,7 +457,151 @@ app.put("/prestamos/devolver/:id", (req, res) => {
     );
 });
 
+// =====================================================
+// REPORTE: TOTAL DE PRÉSTAMOS
+// =====================================================
 
+// Creamos una ruta HTTP GET.
+// Su dirección completa será:
+// https://restaurante-api-con-node.onrender.com/reportes/total
+app.get("/reportes/total", (req, res) => {
+
+    // COUNT(*) cuenta todos los registros de la tabla préstamos.
+    // AS total cambia el nombre de la columna resultante a "total".
+    const sql = `
+        SELECT COUNT(*) AS total
+        FROM prestamos
+    `;
+
+    // Enviamos la consulta SQL a la base de datos.
+    conexion.query(sql, (err, result) => {
+
+        // Si MySQL devuelve un error, entramos en este bloque.
+        if (err) {
+
+            // Mostramos el error real solamente en la consola de Render.
+            console.error(
+                "Error obteniendo total de préstamos:",
+                err
+            );
+
+            // Respondemos con código HTTP 500 porque ocurrió
+            // un error interno en el servidor.
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al obtener el total de préstamos"
+            });
+        }
+
+        // result es un arreglo parecido a:
+        // [{ total: 10 }]
+        //
+        // Por eso utilizamos result[0] para obtener el primer objeto
+        // y result[0].total para obtener únicamente el número.
+        return res.status(200).json({
+            status: "ok",
+            total: result[0].total
+        });
+    });
+});
+
+
+// =====================================================
+// REPORTE: PRÉSTAMOS PENDIENTES
+// =====================================================
+
+// Esta ruta contará los préstamos que todavía
+// no tienen una fecha de devolución.
+app.get("/reportes/pendientes", (req, res) => {
+
+    // IS NULL busca registros cuyo campo fecha_devolucion
+    // todavía no contiene ninguna fecha.
+    //
+    // AS pendientes hace que el resultado se llame "pendientes".
+    const sql = `
+        SELECT COUNT(*) AS pendientes
+        FROM prestamos
+        WHERE fecha_devolucion IS NULL
+    `;
+
+    // Ejecutamos la consulta en MySQL.
+    conexion.query(sql, (err, result) => {
+
+        // Comprobamos si ocurrió algún error.
+        if (err) {
+
+            // Guardamos el error técnico en la consola del servidor.
+            console.error(
+                "Error obteniendo préstamos pendientes:",
+                err
+            );
+
+            // Enviamos una respuesta segura para Flutter.
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al obtener los préstamos pendientes"
+            });
+        }
+
+        // MySQL devuelve:
+        // [{ pendientes: 4 }]
+        //
+        // Extraemos el número usando result[0].pendientes.
+        return res.status(200).json({
+            status: "ok",
+            pendientes: result[0].pendientes
+        });
+    });
+});
+
+
+// =====================================================
+// REPORTE: PRÉSTAMOS DEVUELTOS
+// =====================================================
+
+// Esta ruta contará los préstamos que ya tienen
+// una fecha de devolución registrada.
+app.get("/reportes/devueltos", (req, res) => {
+
+    // IS NOT NULL significa que fecha_devolucion
+    // sí contiene una fecha.
+    //
+    // AS devueltos asigna un nombre al resultado.
+    const sql = `
+        SELECT COUNT(*) AS devueltos
+        FROM prestamos
+        WHERE fecha_devolucion IS NOT NULL
+    `;
+
+    // Ejecutamos la consulta en la conexión de Aiven.
+    conexion.query(sql, (err, result) => {
+
+        // Comprobamos si MySQL produjo un error.
+        if (err) {
+
+            // El error técnico aparece en los logs de Render.
+            console.error(
+                "Error obteniendo préstamos devueltos:",
+                err
+            );
+
+            // Respondemos con código 500 y un mensaje entendible.
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al obtener los préstamos devueltos"
+            });
+        }
+
+        // MySQL devuelve:
+        // [{ devueltos: 6 }]
+        //
+        // Tomamos el primer resultado y enviamos su valor.
+        return res.status(200).json({
+            status: "ok",
+            devueltos: result[0].devueltos
+        });
+    });
+});
 // =====================================================
 // RUTA NO ENCONTRADA
 // =====================================================
