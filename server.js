@@ -160,7 +160,7 @@ app.post("/login", (req, res) => {
         return res.status(400).json({
             status: "fail",
             mensaje: "Usuario y contraseña son obligatorios"
-       "
+       
         });
     }
 
