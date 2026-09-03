@@ -6,6 +6,9 @@ const express = require("express");
 const mysql = require("mysql2");
 const bodyParser = require("body-parser");
 const cors = require("cors");
+const QRCode = require("qrcode");
+const fs = require("fs");
+const path = require("path");
 
 // =====================================================
 // CREAR APLICACIÓN EXPRESS
@@ -19,6 +22,40 @@ const app = express();
 
 app.use(bodyParser.json());
 app.use(cors());
+
+// =====================================================
+// CONFIGURACIÓN DE CÓDIGOS QR
+// =====================================================
+
+const carpetaQR = path.join(__dirname, "qrs");
+
+if (!fs.existsSync(carpetaQR)) {
+    fs.mkdirSync(carpetaQR, { recursive: true });
+}
+
+// Permite abrir los códigos QR desde Render.
+app.use("/qrs", express.static(carpetaQR));
+
+async function generarQR(materialId) {
+    const nombreArchivo = `${materialId}.png`;
+    const ruta = path.join(carpetaQR, nombreArchivo);
+
+    await QRCode.toFile(ruta, String(materialId), {
+        color: {
+            dark: "#000000",
+            light: "#FFFFFF"
+        },
+        margin: 2,
+        width: 300
+    });
+
+    console.log(`QR generado en: ${ruta}`);
+
+    return {
+        nombreArchivo,
+        ruta
+    };
+}
 
 // =====================================================
 // CONEXIÓN A AIVEN MYSQL
@@ -61,7 +98,7 @@ app.get("/", (req, res) => {
 });
 
 // =====================================================
-// REGISTRAR MATERIAL
+// REGISTRAR MATERIAL Y GENERAR QR
 // =====================================================
 
 app.post("/materiales", (req, res) => {
@@ -87,7 +124,7 @@ app.post("/materiales", (req, res) => {
     conexion.query(
         sql,
         [nombre, cantidad, estado],
-        (err, result) => {
+        async (err, result) => {
             if (err) {
                 console.error("Error registrando material:", err);
 
@@ -97,11 +134,28 @@ app.post("/materiales", (req, res) => {
                 });
             }
 
-            return res.status(201).json({
-                status: "ok",
-                mensaje: "Material registrado",
-                id: result.insertId
-            });
+            try {
+                const qr = await generarQR(result.insertId);
+
+                const qrUrl =
+                    `${req.protocol}://${req.get("host")}/qrs/${qr.nombreArchivo}`;
+
+                return res.status(201).json({
+                    status: "ok",
+                    mensaje: "Material registrado y QR generado",
+                    id: result.insertId,
+                    qr_url: qrUrl
+                });
+            } catch (errorQR) {
+                console.error("Error generando QR:", errorQR);
+
+                return res.status(201).json({
+                    status: "ok",
+                    mensaje:
+                        "Material registrado, pero no se pudo generar el QR",
+                    id: result.insertId
+                });
+            }
         }
     );
 });
@@ -135,6 +189,61 @@ app.get("/materiales", (req, res) => {
             status: "ok",
             materiales: result
         });
+    });
+});
+
+// =====================================================
+// GENERAR O CONSULTAR QR DE UN MATERIAL
+// =====================================================
+// Ejemplo:
+// GET /materiales/13/qr
+
+app.get("/materiales/:id/qr", (req, res) => {
+    const materialId = Number(req.params.id);
+
+    if (!Number.isInteger(materialId) || materialId <= 0) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "El ID del material no es válido"
+        });
+    }
+
+    const sql = `
+        SELECT id
+        FROM materiales
+        WHERE id = ?
+        LIMIT 1
+    `;
+
+    conexion.query(sql, [materialId], async (err, result) => {
+        if (err) {
+            console.error("Error consultando material para QR:", err);
+
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al consultar el material"
+            });
+        }
+
+        if (result.length === 0) {
+            return res.status(404).json({
+                status: "error",
+                mensaje: "Material no encontrado"
+            });
+        }
+
+        try {
+            const qr = await generarQR(materialId);
+
+            return res.sendFile(qr.ruta);
+        } catch (errorQR) {
+            console.error("Error generando QR:", errorQR);
+
+            return res.status(500).json({
+                status: "error",
+                mensaje: "No se pudo generar el código QR"
+            });
+        }
     });
 });
 
@@ -199,7 +308,7 @@ app.post("/login", (req, res) => {
 });
 
 // =====================================================
-// ASIGNAR PERMISOS A UN MAESTRO
+// ASIGNAR PERMISOS
 // =====================================================
 
 app.post("/permisos", (req, res) => {
@@ -261,8 +370,6 @@ app.post("/permisos", (req, res) => {
 // =====================================================
 // REGISTRAR PRÉSTAMO VALIDANDO PERMISOS
 // =====================================================
-// La fecha de devolución no se registra aquí.
-// MySQL la dejará como NULL.
 
 app.post("/prestamos", (req, res) => {
     const {
@@ -308,7 +415,8 @@ app.post("/prestamos", (req, res) => {
             if (permisos.length === 0) {
                 return res.status(403).json({
                     status: "fail",
-                    mensaje: "No tienes permiso para prestar este material"
+                    mensaje:
+                        "No tienes permiso para prestar este material"
                 });
             }
 
@@ -324,7 +432,11 @@ app.post("/prestamos", (req, res) => {
 
             conexion.query(
                 sqlPrestamo,
-                [material_id, fecha_prestamo, maestroLimpio],
+                [
+                    material_id,
+                    fecha_prestamo,
+                    maestroLimpio
+                ],
                 (errPrestamo, result) => {
                     if (errPrestamo) {
                         console.error(
@@ -386,10 +498,9 @@ app.get("/prestamos", (req, res) => {
 });
 
 // =====================================================
-// MARCAR MATERIAL COMO DEVUELTO
+// DEVOLVER MEDIANTE ID DEL PRÉSTAMO
 // =====================================================
-// Ejemplo:
-// PUT /prestamos/devolver/1
+// Esta ruta se conserva para ListaPrestamos de Flutter.
 
 app.put("/prestamos/devolver/:id", (req, res) => {
     const idPrestamo = Number(req.params.id);
@@ -405,6 +516,7 @@ app.put("/prestamos/devolver/:id", (req, res) => {
         UPDATE prestamos
         SET fecha_devolucion = NOW()
         WHERE id = ?
+        AND fecha_devolucion IS NULL
     `;
 
     conexion.query(sql, [idPrestamo], (err, result) => {
@@ -419,8 +531,9 @@ app.put("/prestamos/devolver/:id", (req, res) => {
 
         if (result.affectedRows === 0) {
             return res.status(404).json({
-                status: "error",
-                mensaje: "Préstamo no encontrado"
+                status: "fail",
+                mensaje:
+                    "Préstamo no encontrado o ya fue devuelto"
             });
         }
 
@@ -430,6 +543,111 @@ app.put("/prestamos/devolver/:id", (req, res) => {
         });
     });
 });
+
+// =====================================================
+// ENTREGA MEDIANTE QR DEL MATERIAL
+// =====================================================
+
+app.put(
+    "/prestamos/devolver-material/:material_id",
+    (req, res) => {
+        const materialId = Number(req.params.material_id);
+
+        const maestro =
+            req.body.maestro?.toString().trim();
+
+        if (
+            !Number.isInteger(materialId) ||
+            materialId <= 0 ||
+            !maestro
+        ) {
+            return res.status(400).json({
+                status: "error",
+                mensaje:
+                    "El material y el maestro son obligatorios"
+            });
+        }
+
+        const sqlPermiso = `
+            SELECT id
+            FROM permisos
+            WHERE maestro = ?
+            AND material_id = ?
+            AND puede_devolver = TRUE
+            LIMIT 1
+        `;
+
+        conexion.query(
+            sqlPermiso,
+            [maestro, materialId],
+            (errPermiso, permisos) => {
+                if (errPermiso) {
+                    console.error(
+                        "Error consultando permiso de devolución:",
+                        errPermiso
+                    );
+
+                    return res.status(500).json({
+                        status: "error",
+                        mensaje:
+                            "Error al consultar los permisos"
+                    });
+                }
+
+                if (permisos.length === 0) {
+                    return res.status(403).json({
+                        status: "fail",
+                        mensaje:
+                            "No tienes permiso para devolver este material"
+                    });
+                }
+
+                const sqlEntrega = `
+                    UPDATE prestamos
+                    SET fecha_devolucion = NOW()
+                    WHERE material_id = ?
+                    AND maestro = ?
+                    AND fecha_devolucion IS NULL
+                    ORDER BY id DESC
+                    LIMIT 1
+                `;
+
+                conexion.query(
+                    sqlEntrega,
+                    [materialId, maestro],
+                    (errEntrega, result) => {
+                        if (errEntrega) {
+                            console.error(
+                                "Error registrando entrega mediante QR:",
+                                errEntrega
+                            );
+
+                            return res.status(500).json({
+                                status: "error",
+                                mensaje:
+                                    "Error al registrar la entrega"
+                            });
+                        }
+
+                        if (result.affectedRows === 0) {
+                            return res.status(404).json({
+                                status: "fail",
+                                mensaje:
+                                    "No existe un préstamo pendiente para este material"
+                            });
+                        }
+
+                        return res.status(200).json({
+                            status: "ok",
+                            mensaje:
+                                "Entrega registrada mediante QR"
+                        });
+                    }
+                );
+            }
+        );
+    }
+);
 
 // =====================================================
 // NOTIFICACIONES PENDIENTES POR MAESTRO
@@ -455,11 +673,15 @@ app.get("/notificaciones/:maestro", (req, res) => {
 
     conexion.query(sql, [maestro], (err, result) => {
         if (err) {
-            console.error("Error obteniendo notificaciones:", err);
+            console.error(
+                "Error obteniendo notificaciones:",
+                err
+            );
 
             return res.status(500).json({
                 status: "error",
-                mensaje: "Error al obtener las notificaciones"
+                mensaje:
+                    "Error al obtener las notificaciones"
             });
         }
 
@@ -486,7 +708,8 @@ app.get("/reportes/total", (req, res) => {
 
             return res.status(500).json({
                 status: "error",
-                mensaje: "Error al obtener el total de préstamos"
+                mensaje:
+                    "Error al obtener el total de préstamos"
             });
         }
 
@@ -517,7 +740,8 @@ app.get("/reportes/pendientes", (req, res) => {
 
             return res.status(500).json({
                 status: "error",
-                mensaje: "Error al obtener los préstamos pendientes"
+                mensaje:
+                    "Error al obtener los préstamos pendientes"
             });
         }
 
@@ -548,7 +772,8 @@ app.get("/reportes/devueltos", (req, res) => {
 
             return res.status(500).json({
                 status: "error",
-                mensaje: "Error al obtener los préstamos devueltos"
+                mensaje:
+                    "Error al obtener los préstamos devueltos"
             });
         }
 
