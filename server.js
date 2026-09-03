@@ -1,7 +1,3 @@
-// =====================================================
-// IMPORTAR LIBRERÍAS
-// =====================================================
-
 const express = require("express");
 const mysql = require("mysql2");
 const bodyParser = require("body-parser");
@@ -19,12 +15,12 @@ const app = express();
 const JWT_SECRET =
     process.env.JWT_SECRET || "clave_secreta_inventario_stockify";
 
-// =====================================================
-// MIDDLEWARES
-// =====================================================
-
 app.use(bodyParser.json());
 app.use(cors());
+
+// =====================================================
+// VALIDACIÓN DE TOKEN
+// =====================================================
 
 function verificarToken(req, res, next) {
     const authorization = req.headers.authorization || "";
@@ -65,13 +61,15 @@ function soloAdministrador(req, res, next) {
 }
 
 // =====================================================
-// CONFIGURACIÓN DE CÓDIGOS QR
+// CONFIGURACIÓN DE QR
 // =====================================================
 
 const carpetaQR = path.join(__dirname, "qrs");
 
 if (!fs.existsSync(carpetaQR)) {
-    fs.mkdirSync(carpetaQR, { recursive: true });
+    fs.mkdirSync(carpetaQR, {
+        recursive: true
+    });
 }
 
 app.use("/qrs", express.static(carpetaQR));
@@ -96,7 +94,7 @@ async function generarQR(materialId) {
 }
 
 // =====================================================
-// CONEXIÓN A AIVEN MYSQL
+// CONEXIÓN MYSQL AIVEN
 // =====================================================
 
 const conexion = mysql.createConnection({
@@ -105,7 +103,6 @@ const conexion = mysql.createConnection({
     password: process.env.DB_PASSWORD,
     database: process.env.DB_NAME,
     port: Number(process.env.DB_PORT),
-
     ssl: {
         rejectUnauthorized: false
     }
@@ -132,7 +129,7 @@ app.get("/", (req, res) => {
 });
 
 // =====================================================
-// REGISTRAR MATERIAL Y GENERAR QR
+// REGISTRAR MATERIAL
 // =====================================================
 
 app.post("/materiales", (req, res) => {
@@ -227,7 +224,39 @@ app.get("/materiales", (req, res) => {
 });
 
 // =====================================================
-// GENERAR O CONSULTAR QR DE UN MATERIAL
+// OBTENER MAESTROS PARA LISTAS DESPLEGABLES
+// =====================================================
+
+app.get("/maestros", (req, res) => {
+    const sql = `
+        SELECT
+            id,
+            usuario AS nombre,
+            usuario
+        FROM usuarios
+        WHERE rol = 'maestro'
+        ORDER BY usuario ASC
+    `;
+
+    conexion.query(sql, (err, result) => {
+        if (err) {
+            console.error("Error obteniendo maestros:", err);
+
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al obtener los maestros"
+            });
+        }
+
+        return res.status(200).json({
+            status: "ok",
+            maestros: result
+        });
+    });
+});
+
+// =====================================================
+// GENERAR O CONSULTAR QR
 // =====================================================
 
 app.get("/materiales/:id/qr", (req, res) => {
@@ -266,7 +295,6 @@ app.get("/materiales/:id/qr", (req, res) => {
 
         try {
             const qr = await generarQR(materialId);
-
             return res.sendFile(qr.ruta);
         } catch (errorQR) {
             console.error("Error generando QR:", errorQR);
@@ -280,7 +308,7 @@ app.get("/materiales/:id/qr", (req, res) => {
 });
 
 // =====================================================
-// GUÍA 13: REGISTRAR USUARIO SEGURO
+// REGISTRO DE USUARIOS
 // =====================================================
 
 app.post("/registro", (req, res) => {
@@ -362,8 +390,7 @@ app.post("/registro", (req, res) => {
 
                             return res.status(500).json({
                                 status: "error",
-                                mensaje:
-                                    "No se pudo registrar el usuario"
+                                mensaje: "No se pudo registrar el usuario"
                             });
                         }
 
@@ -375,10 +402,7 @@ app.post("/registro", (req, res) => {
                     }
                 );
             } catch (error) {
-                console.error(
-                    "Error cifrando contraseña:",
-                    error
-                );
+                console.error("Error cifrando contraseña:", error);
 
                 return res.status(500).json({
                     status: "error",
@@ -390,7 +414,7 @@ app.post("/registro", (req, res) => {
 });
 
 // =====================================================
-// GUÍA 13: LOGIN CON BCRYPT Y JWT
+// LOGIN CON JWT
 // =====================================================
 
 app.post("/login", (req, res) => {
@@ -438,8 +462,7 @@ app.post("/login", (req, res) => {
             }
 
             const usuarioEncontrado = result[0];
-            const claveGuardada =
-                String(usuarioEncontrado.clave);
+            const claveGuardada = String(usuarioEncontrado.clave);
 
             const estaCifrada =
                 claveGuardada.startsWith("$2a$") ||
@@ -489,8 +512,7 @@ app.post("/login", (req, res) => {
                 const token = jwt.sign(
                     {
                         id: usuarioEncontrado.id,
-                        usuario:
-                            usuarioEncontrado.usuario,
+                        usuario: usuarioEncontrado.usuario,
                         rol: usuarioEncontrado.rol
                     },
                     JWT_SECRET,
@@ -503,15 +525,11 @@ app.post("/login", (req, res) => {
                     status: "ok",
                     token,
                     id: usuarioEncontrado.id,
-                    usuario:
-                        usuarioEncontrado.usuario,
+                    usuario: usuarioEncontrado.usuario,
                     rol: usuarioEncontrado.rol
                 });
             } catch (error) {
-                console.error(
-                    "Error validando contraseña:",
-                    error
-                );
+                console.error("Error validando contraseña:", error);
 
                 return res.status(500).json({
                     status: "error",
@@ -523,7 +541,7 @@ app.post("/login", (req, res) => {
 });
 
 // =====================================================
-// RUTA PROTEGIDA PARA ADMINISTRADORES
+// RUTA PROTEGIDA DE ADMINISTRADOR
 // =====================================================
 
 app.get(
@@ -559,135 +577,105 @@ app.post("/permisos", (req, res) => {
         });
     }
 
-    const sql = `
-        INSERT INTO permisos
-        (
-            maestro,
-            material_id,
-            puede_ver,
-            puede_prestar,
-            puede_devolver
-        )
-        VALUES (?, ?, ?, ?, ?)
-    `;
-
-    conexion.query(
-        sql,
-        [
-            maestro,
-            material_id,
-            puede_ver,
-            puede_prestar,
-            puede_devolver
-        ],
-        (err, result) => {
-            if (err) {
-                console.error("Error asignando permiso:", err);
-
-                return res.status(500).json({
-                    status: "error",
-                    mensaje: "Error al asignar el permiso"
-                });
-            }
-
-            return res.status(201).json({
-                status: "ok",
-                mensaje: "Permiso asignado",
-                id: result.insertId
-            });
-        }
-    );
-});
-
-// =====================================================
-// REGISTRAR PRÉSTAMO VALIDANDO PERMISOS
-// =====================================================
-
-app.post("/prestamos", (req, res) => {
-    const {
-        material_id,
-        fecha_prestamo,
-        maestro
-    } = req.body;
-
-    if (!material_id || !fecha_prestamo || !maestro) {
-        return res.status(400).json({
-            status: "error",
-            mensaje: "Faltan datos obligatorios"
-        });
-    }
-
-    const maestroLimpio = String(maestro).trim();
-
-    const sqlPermiso = `
+    const sqlBuscar = `
         SELECT id
         FROM permisos
         WHERE maestro = ?
         AND material_id = ?
-        AND puede_prestar = TRUE
         LIMIT 1
     `;
 
     conexion.query(
-        sqlPermiso,
-        [
-            maestroLimpio,
-            material_id
-        ],
-        (errPermiso, permisos) => {
-            if (errPermiso) {
-                console.error(
-                    "Error consultando permisos:",
-                    errPermiso
-                );
+        sqlBuscar,
+        [String(maestro).trim(), material_id],
+        (errorBuscar, permisos) => {
+            if (errorBuscar) {
+                console.error("Error consultando permiso:", errorBuscar);
 
                 return res.status(500).json({
                     status: "error",
-                    mensaje: "Error al consultar los permisos"
+                    mensaje: "Error al consultar el permiso"
                 });
             }
 
-            if (permisos.length === 0) {
-                return res.status(403).json({
-                    status: "fail",
-                    mensaje:
-                        "No tienes permiso para prestar este material"
-                });
+            if (permisos.length > 0) {
+                const sqlActualizar = `
+                    UPDATE permisos
+                    SET
+                        puede_ver = ?,
+                        puede_prestar = ?,
+                        puede_devolver = ?
+                    WHERE id = ?
+                `;
+
+                conexion.query(
+                    sqlActualizar,
+                    [
+                        puede_ver,
+                        puede_prestar,
+                        puede_devolver,
+                        permisos[0].id
+                    ],
+                    (errorActualizar) => {
+                        if (errorActualizar) {
+                            console.error(
+                                "Error actualizando permiso:",
+                                errorActualizar
+                            );
+
+                            return res.status(500).json({
+                                status: "error",
+                                mensaje: "Error al actualizar el permiso"
+                            });
+                        }
+
+                        return res.status(200).json({
+                            status: "ok",
+                            mensaje: "Permiso actualizado"
+                        });
+                    }
+                );
+
+                return;
             }
 
-            const sqlPrestamo = `
-                INSERT INTO prestamos
+            const sqlInsertar = `
+                INSERT INTO permisos
                 (
+                    maestro,
                     material_id,
-                    fecha_prestamo,
-                    maestro
+                    puede_ver,
+                    puede_prestar,
+                    puede_devolver
                 )
-                VALUES (?, ?, ?)
+                VALUES (?, ?, ?, ?, ?)
             `;
 
             conexion.query(
-                sqlPrestamo,
+                sqlInsertar,
                 [
+                    String(maestro).trim(),
                     material_id,
-                    fecha_prestamo,
-                    maestroLimpio
+                    puede_ver,
+                    puede_prestar,
+                    puede_devolver
                 ],
-                (errPrestamo, result) => {
-                    if (errPrestamo) {
+                (errorInsertar, result) => {
+                    if (errorInsertar) {
                         console.error(
-                            "Error registrando préstamo:",
-                            errPrestamo
+                            "Error asignando permiso:",
+                            errorInsertar
                         );
 
                         return res.status(500).json({
                             status: "error",
-                            mensaje: "Error al registrar préstamo"
+                            mensaje: "Error al asignar el permiso"
                         });
                     }
 
                     return res.status(201).json({
                         status: "ok",
-                        mensaje: "Préstamo registrado",
+                        mensaje: "Permiso asignado",
                         id: result.insertId
                     });
                 }
@@ -697,7 +685,189 @@ app.post("/prestamos", (req, res) => {
 });
 
 // =====================================================
-// OBTENER PRÉSTAMOS
+// REGISTRAR PRÉSTAMO
+// ACEPTA maestro O docente_id PARA NO ROMPER FLUTTER
+// =====================================================
+
+app.post("/prestamos", (req, res) => {
+    const {
+        material_id,
+        fecha_prestamo,
+        maestro,
+        docente_id
+    } = req.body;
+
+    if (!material_id || !fecha_prestamo || (!maestro && !docente_id)) {
+        return res.status(400).json({
+            status: "error",
+            mensaje:
+                "El material, la fecha y el maestro son obligatorios"
+        });
+    }
+
+    const procesarPrestamo = (
+        maestroFinal,
+        docenteIdFinal
+    ) => {
+        const sqlPermiso = `
+            SELECT id
+            FROM permisos
+            WHERE maestro = ?
+            AND material_id = ?
+            AND puede_prestar = TRUE
+            LIMIT 1
+        `;
+
+        conexion.query(
+            sqlPermiso,
+            [maestroFinal, material_id],
+            (errPermiso, permisos) => {
+                if (errPermiso) {
+                    console.error(
+                        "Error consultando permisos:",
+                        errPermiso
+                    );
+
+                    return res.status(500).json({
+                        status: "error",
+                        mensaje: "Error al consultar los permisos"
+                    });
+                }
+
+                if (permisos.length === 0) {
+                    return res.status(403).json({
+                        status: "fail",
+                        mensaje:
+                            "No tienes permiso para prestar este material"
+                    });
+                }
+
+                const sqlPrestamo = `
+                    INSERT INTO prestamos
+                    (
+                        material_id,
+                        docente_id,
+                        fecha_prestamo,
+                        maestro
+                    )
+                    VALUES (?, ?, ?, ?)
+                `;
+
+                conexion.query(
+                    sqlPrestamo,
+                    [
+                        material_id,
+                        docenteIdFinal,
+                        fecha_prestamo,
+                        maestroFinal
+                    ],
+                    (errPrestamo, result) => {
+                        if (errPrestamo) {
+                            console.error(
+                                "Error registrando préstamo:",
+                                errPrestamo
+                            );
+
+                            return res.status(500).json({
+                                status: "error",
+                                mensaje: "Error al registrar préstamo"
+                            });
+                        }
+
+                        return res.status(201).json({
+                            status: "ok",
+                            mensaje: "Préstamo registrado",
+                            id: result.insertId
+                        });
+                    }
+                );
+            }
+        );
+    };
+
+    if (docente_id) {
+        const sqlDocente = `
+            SELECT
+                id,
+                usuario
+            FROM usuarios
+            WHERE id = ?
+            AND rol = 'maestro'
+            LIMIT 1
+        `;
+
+        conexion.query(
+            sqlDocente,
+            [docente_id],
+            (errorDocente, docentes) => {
+                if (errorDocente) {
+                    console.error(
+                        "Error consultando docente:",
+                        errorDocente
+                    );
+
+                    return res.status(500).json({
+                        status: "error",
+                        mensaje: "Error al consultar el docente"
+                    });
+                }
+
+                if (docentes.length === 0) {
+                    return res.status(404).json({
+                        status: "fail",
+                        mensaje: "Docente no encontrado"
+                    });
+                }
+
+                procesarPrestamo(
+                    docentes[0].usuario,
+                    docentes[0].id
+                );
+            }
+        );
+
+        return;
+    }
+
+    const maestroLimpio = String(maestro).trim();
+
+    const sqlMaestro = `
+        SELECT id
+        FROM usuarios
+        WHERE usuario = ?
+        AND rol = 'maestro'
+        LIMIT 1
+    `;
+
+    conexion.query(
+        sqlMaestro,
+        [maestroLimpio],
+        (errorMaestro, maestros) => {
+            if (errorMaestro) {
+                console.error(
+                    "Error consultando maestro:",
+                    errorMaestro
+                );
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "Error al consultar el maestro"
+                });
+            }
+
+            const docenteIdFinal =
+                maestros.length > 0 ? maestros[0].id : null;
+
+            procesarPrestamo(
+                maestroLimpio,
+                docenteIdFinal
+            );
+        }
+    );
+});
+
+// =====================================================
+// GUÍA 15: PRÉSTAMOS CON NOMBRES
 // =====================================================
 
 app.get("/prestamos", (req, res) => {
@@ -706,22 +876,44 @@ app.get("/prestamos", (req, res) => {
             p.id,
             p.material_id,
             m.nombre AS material,
+            p.docente_id,
+
+            COALESCE(
+                u.usuario,
+                p.maestro,
+                'No especificado'
+            ) AS docente,
+
+            COALESCE(
+                u.usuario,
+                p.maestro,
+                'No especificado'
+            ) AS maestro,
+
             p.fecha_prestamo,
-            p.fecha_devolucion,
-            p.maestro
+            p.fecha_devolucion
+
         FROM prestamos p
+
         INNER JOIN materiales m
             ON p.material_id = m.id
+
+        LEFT JOIN usuarios u
+            ON p.docente_id = u.id
+
         ORDER BY p.id DESC
     `;
 
     conexion.query(sql, (err, result) => {
         if (err) {
-            console.error("Error obteniendo préstamos:", err);
+            console.error(
+                "Error obteniendo préstamos con nombres:",
+                err
+            );
 
             return res.status(500).json({
                 status: "error",
-                mensaje: "Error al obtener préstamos"
+                mensaje: "Error al obtener los préstamos"
             });
         }
 
@@ -733,7 +925,7 @@ app.get("/prestamos", (req, res) => {
 });
 
 // =====================================================
-// DEVOLVER MEDIANTE ID DEL PRÉSTAMO
+// DEVOLVER PRÉSTAMO POR ID
 // =====================================================
 
 app.put("/prestamos/devolver/:id", (req, res) => {
@@ -778,7 +970,7 @@ app.put("/prestamos/devolver/:id", (req, res) => {
 });
 
 // =====================================================
-// DEVOLVER MATERIAL MEDIANTE QR
+// DEVOLVER MEDIANTE QR
 // =====================================================
 
 app.put(
@@ -812,10 +1004,7 @@ app.put(
 
         conexion.query(
             sqlPermiso,
-            [
-                maestro,
-                materialId
-            ],
+            [maestro, materialId],
             (errPermiso, permisos) => {
                 if (errPermiso) {
                     console.error(
@@ -849,10 +1038,7 @@ app.put(
 
                 conexion.query(
                     sqlEntrega,
-                    [
-                        materialId,
-                        maestro
-                    ],
+                    [materialId, maestro],
                     (errorEntrega, result) => {
                         if (errorEntrega) {
                             console.error(
@@ -888,7 +1074,7 @@ app.put(
 );
 
 // =====================================================
-// NOTIFICACIONES PENDIENTES POR MAESTRO
+// NOTIFICACIONES DE PRÉSTAMOS PENDIENTES
 // =====================================================
 
 app.get("/notificaciones/:maestro", (req, res) => {
@@ -902,11 +1088,19 @@ app.get("/notificaciones/:maestro", (req, res) => {
     }
 
     const sql = `
-        SELECT *
-        FROM prestamos
-        WHERE maestro = ?
-        AND fecha_devolucion IS NULL
-        ORDER BY fecha_prestamo ASC
+        SELECT
+            p.id,
+            p.material_id,
+            m.nombre AS material,
+            p.fecha_prestamo,
+            p.fecha_devolucion,
+            p.maestro
+        FROM prestamos p
+        INNER JOIN materiales m
+            ON p.material_id = m.id
+        WHERE p.maestro = ?
+        AND p.fecha_devolucion IS NULL
+        ORDER BY p.fecha_prestamo ASC
     `;
 
     conexion.query(sql, [maestro], (err, result) => {
@@ -927,7 +1121,7 @@ app.get("/notificaciones/:maestro", (req, res) => {
 });
 
 // =====================================================
-// FUNCIONES PARA REPORTES FILTRADOS
+// FUNCIONES PARA REPORTES
 // =====================================================
 
 function obtenerFiltrosReporte(req) {
@@ -977,7 +1171,13 @@ function construirConsultaReporte(filtros) {
             p.id,
             p.material_id,
             m.nombre AS material,
-            p.maestro,
+
+            COALESCE(
+                u.usuario,
+                p.maestro,
+                'No especificado'
+            ) AS maestro,
+
             p.fecha_prestamo,
             p.fecha_devolucion,
 
@@ -992,23 +1192,35 @@ function construirConsultaReporte(filtros) {
         INNER JOIN materiales m
             ON p.material_id = m.id
 
+        LEFT JOIN usuarios u
+            ON p.docente_id = u.id
+
         WHERE 1 = 1
     `;
 
     const parametros = [];
 
     if (filtros.maestro) {
-        sql += " AND p.maestro = ?";
+        sql += `
+            AND COALESCE(u.usuario, p.maestro) = ?
+        `;
+
         parametros.push(filtros.maestro);
     }
 
     if (filtros.fechaInicio) {
-        sql += " AND DATE(p.fecha_prestamo) >= ?";
+        sql += `
+            AND DATE(p.fecha_prestamo) >= ?
+        `;
+
         parametros.push(filtros.fechaInicio);
     }
 
     if (filtros.fechaFin) {
-        sql += " AND DATE(p.fecha_prestamo) <= ?";
+        sql += `
+            AND DATE(p.fecha_prestamo) <= ?
+        `;
+
         parametros.push(filtros.fechaFin);
     }
 
@@ -1039,25 +1251,23 @@ function mostrarFechaReporte(valor) {
     const mes =
         String(fecha.getMonth() + 1).padStart(2, "0");
 
-    const anio =
-        fecha.getFullYear();
+    const anio = fecha.getFullYear();
 
     const hora =
         String(fecha.getHours()).padStart(2, "0");
 
     const minuto =
-        String(fecha.getMinutes()).padStart(2, "0");
+        String(fecha.getMinutes()).padStartpadStart(2, "0");
 
     return `${dia}/${mes}/${anio} ${hora}:${minuto}`;
 }
 
 // =====================================================
-// REPORTE FILTRADO EN JSON
+// REPORTE FILTRADO JSON
 // =====================================================
 
 app.get("/reportes/filtrados", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
-
     const errorFiltros =
         validarFiltrosReporte(filtros);
 
@@ -1099,12 +1309,11 @@ app.get("/reportes/filtrados", (req, res) => {
 });
 
 // =====================================================
-// EXPORTAR REPORTE A PDF
+// REPORTE PDF
 // =====================================================
 
 app.get("/reportes/pdf", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
-
     const errorFiltros =
         validarFiltrosReporte(filtros);
 
@@ -1272,12 +1481,11 @@ app.get("/reportes/pdf", (req, res) => {
 });
 
 // =====================================================
-// EXPORTAR REPORTE A EXCEL
+// REPORTE EXCEL
 // =====================================================
 
 app.get("/reportes/excel", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
-
     const errorFiltros =
         validarFiltrosReporte(filtros);
 
@@ -1312,11 +1520,8 @@ app.get("/reportes/excel", (req, res) => {
                 const libro =
                     new ExcelJS.Workbook();
 
-                libro.creator =
-                    "Inventario Escolar";
-
-                libro.created =
-                    new Date();
+                libro.creator = "Inventario Escolar";
+                libro.created = new Date();
 
                 const hoja =
                     libro.addWorksheet("Préstamos");
@@ -1361,17 +1566,10 @@ app.get("/reportes/excel", (req, res) => {
 
                 prestamos.forEach((prestamo) => {
                     hoja.addRow({
-                        id:
-                            prestamo.id,
-
-                        material_id:
-                            prestamo.material_id,
-
-                        material:
-                            prestamo.material,
-
-                        maestro:
-                            prestamo.maestro,
+                        id: prestamo.id,
+                        material_id: prestamo.material_id,
+                        material: prestamo.material,
+                        maestro: prestamo.maestro,
 
                         fecha_prestamo:
                             mostrarFechaReporte(
@@ -1383,13 +1581,11 @@ app.get("/reportes/excel", (req, res) => {
                                 prestamo.fecha_devolucion
                             ),
 
-                        estado:
-                            prestamo.estado
+                        estado: prestamo.estado
                     });
                 });
 
-                const encabezado =
-                    hoja.getRow(1);
+                const encabezado = hoja.getRow(1);
 
                 encabezado.font = {
                     bold: true,
@@ -1450,7 +1646,7 @@ app.get("/reportes/excel", (req, res) => {
 });
 
 // =====================================================
-// REPORTE: TOTAL DE PRÉSTAMOS
+// ESTADÍSTICAS
 // =====================================================
 
 app.get("/reportes/total", (req, res) => {
@@ -1470,14 +1666,10 @@ app.get("/reportes/total", (req, res) => {
 
         return res.status(200).json({
             status: "ok",
-            total: result[0].total
+            total: Number(result[0].total)
         });
     });
 });
-
-// =====================================================
-// REPORTE: PRÉSTAMOS PENDIENTES
-// =====================================================
 
 app.get("/reportes/pendientes", (req, res) => {
     const sql = `
@@ -1497,15 +1689,10 @@ app.get("/reportes/pendientes", (req, res) => {
 
         return res.status(200).json({
             status: "ok",
-            pendientes:
-                result[0].pendientes
+            pendientes: Number(result[0].pendientes)
         });
     });
 });
-
-// =====================================================
-// REPORTE: PRÉSTAMOS DEVUELTOS
-// =====================================================
 
 app.get("/reportes/devueltos", (req, res) => {
     const sql = `
@@ -1525,14 +1712,13 @@ app.get("/reportes/devueltos", (req, res) => {
 
         return res.status(200).json({
             status: "ok",
-            devueltos:
-                result[0].devueltos
+            devueltos: Number(result[0].devueltos)
         });
     });
 });
 
 // =====================================================
-// GUÍA 14: MÉTRICAS DEL DASHBOARD
+// DASHBOARD
 // =====================================================
 
 app.get("/dashboard", (req, res) => {
@@ -1607,8 +1793,7 @@ app.use((req, res) => {
 // INICIAR SERVIDOR
 // =====================================================
 
-const PORT =
-    process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
 app.listen(
     PORT,
@@ -1617,9 +1802,7 @@ app.listen(
         console.log("--------------------------------");
         console.log(" INVENTARIO API");
         console.log("--------------------------------");
-        console.log(
-            `Servidor iniciado en puerto ${PORT}`
-        );
+        console.log(`Servidor iniciado en puerto ${PORT}`);
         console.log("--------------------------------");
     }
 );
