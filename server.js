@@ -9,6 +9,8 @@ const cors = require("cors");
 const QRCode = require("qrcode");
 const fs = require("fs");
 const path = require("path");
+const PDFDocument = require("pdfkit");
+const ExcelJS = require("exceljs");
 
 // =====================================================
 // CREAR APLICACIÓN EXPRESS
@@ -687,6 +689,564 @@ app.get("/notificaciones/:maestro", (req, res) => {
 
         return res.status(200).json(result);
     });
+});
+
+// =====================================================
+// CONSULTA PARA REPORTES FILTRADOS
+// =====================================================
+
+function obtenerFiltrosReporte(req) {
+    return {
+        maestro: req.query.maestro?.toString().trim() || "",
+        fechaInicio:
+            req.query.fecha_inicio?.toString().trim() || "",
+        fechaFin:
+            req.query.fecha_fin?.toString().trim() || ""
+    };
+}
+
+function validarFiltrosReporte(filtros) {
+    const formatoFecha = /^\d{4}-\d{2}-\d{2}$/;
+
+    if (
+        filtros.fechaInicio &&
+        !formatoFecha.test(filtros.fechaInicio)
+    ) {
+        return "La fecha inicial debe usar el formato AAAA-MM-DD";
+    }
+
+    if (
+        filtros.fechaFin &&
+        !formatoFecha.test(filtros.fechaFin)
+    ) {
+        return "La fecha final debe usar el formato AAAA-MM-DD";
+    }
+
+    if (
+        filtros.fechaInicio &&
+        filtros.fechaFin &&
+        filtros.fechaInicio > filtros.fechaFin
+    ) {
+        return "La fecha inicial no puede ser posterior a la fecha final";
+    }
+
+    return null;
+}
+
+function construirConsultaReporte(filtros) {
+    let sql = `
+        SELECT
+            p.id,
+            p.material_id,
+            m.nombre AS material,
+            p.maestro,
+            p.fecha_prestamo,
+            p.fecha_devolucion,
+            CASE
+                WHEN p.fecha_devolucion IS NULL
+                    THEN 'Pendiente'
+                ELSE 'Devuelto'
+            END AS estado
+        FROM prestamos p
+        INNER JOIN materiales m
+            ON p.material_id = m.id
+        WHERE 1 = 1
+    `;
+
+    const parametros = [];
+
+    if (filtros.maestro) {
+        sql += " AND p.maestro = ?";
+        parametros.push(filtros.maestro);
+    }
+
+    if (filtros.fechaInicio) {
+        sql += " AND DATE(p.fecha_prestamo) >= ?";
+        parametros.push(filtros.fechaInicio);
+    }
+
+    if (filtros.fechaFin) {
+        sql += " AND DATE(p.fecha_prestamo) <= ?";
+        parametros.push(filtros.fechaFin);
+    }
+
+    sql += " ORDER BY p.fecha_prestamo DESC, p.id DESC";
+
+    return {
+        sql,
+        parametros
+    };
+}
+
+function mostrarFechaReporte(valor) {
+    if (!valor) {
+        return "Pendiente";
+    }
+
+    const fecha = new Date(valor);
+
+    if (Number.isNaN(fecha.getTime())) {
+        return String(valor);
+    }
+
+    const dia = fecha
+        .getDate()
+        .toString()
+        .padStart(2, "0");
+
+    const mes = (fecha.getMonth() + 1)
+        .toString()
+        .padStart(2, "0");
+
+    const anio = fecha.getFullYear();
+
+    const hora = fecha
+        .getHours()
+        .toString()
+        .padStart(2, "0");
+
+    const minuto = fecha
+        .getMinutes()
+        .toString()
+        .padStart(2, "0");
+
+    return `${dia}/${mes}/${anio} ${hora}:${minuto}`;
+}
+
+// =====================================================
+// REPORTE FILTRADO EN JSON
+// =====================================================
+
+app.get("/reportes/filtrados", (req, res) => {
+    const filtros = obtenerFiltrosReporte(req);
+    const errorFiltros = validarFiltrosReporte(filtros);
+
+    if (errorFiltros) {
+        return res.status(400).json({
+            status: "fail",
+            mensaje: errorFiltros
+        });
+    }
+
+    const consulta = construirConsultaReporte(filtros);
+
+    conexion.query(
+        consulta.sql,
+        consulta.parametros,
+        (err, result) => {
+            if (err) {
+                console.error(
+                    "Error obteniendo reporte filtrado:",
+                    err
+                );
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje:
+                        "Error al obtener el reporte filtrado"
+                });
+            }
+
+            return res.status(200).json({
+                status: "ok",
+                filtros,
+                total: result.length,
+                prestamos: result
+            });
+        }
+    );
+});
+
+// =====================================================
+// EXPORTAR REPORTE A PDF
+// =====================================================
+
+app.get("/reportes/pdf", (req, res) => {
+    const filtros = obtenerFiltrosReporte(req);
+    const errorFiltros = validarFiltrosReporte(filtros);
+
+    if (errorFiltros) {
+        return res.status(400).json({
+            status: "fail",
+            mensaje: errorFiltros
+        });
+    }
+
+    const consulta = construirConsultaReporte(filtros);
+
+    conexion.query(
+        consulta.sql,
+        consulta.parametros,
+        (err, prestamos) => {
+            if (err) {
+                console.error(
+                    "Error generando reporte PDF:",
+                    err
+                );
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "Error al generar el reporte PDF"
+                });
+            }
+
+            res.setHeader(
+                "Content-Type",
+                "application/pdf"
+            );
+
+            res.setHeader(
+                "Content-Disposition",
+                'attachment; filename="reporte_prestamos.pdf"'
+            );
+
+            const documento = new PDFDocument({
+                size: "A4",
+                margin: 45,
+                info: {
+                    Title: "Reporte de préstamos",
+                    Author: "Inventario Escolar"
+                }
+            });
+
+            documento.pipe(res);
+
+            documento
+                .font("Helvetica-Bold")
+                .fontSize(20)
+                .fillColor("#0F7A8C")
+                .text(
+                    "Inventario Escolar",
+                    { align: "center" }
+                );
+
+            documento
+                .fontSize(16)
+                .text(
+                    "Reporte filtrado de préstamos",
+                    { align: "center" }
+                );
+
+            documento.moveDown();
+
+            documento
+                .font("Helvetica")
+                .fontSize(10)
+                .fillColor("#222222")
+                .text(
+                    `Maestro: ${
+                        filtros.maestro || "Todos"
+                    }`
+                )
+                .text(
+                    `Fecha inicial: ${
+                        filtros.fechaInicio || "Sin filtro"
+                    }`
+                )
+                .text(
+                    `Fecha final: ${
+                        filtros.fechaFin || "Sin filtro"
+                    }`
+                )
+                .text(
+                    `Total de registros: ${prestamos.length}`
+                );
+
+            documento.moveDown();
+
+            if (prestamos.length === 0) {
+                documento
+                    .fontSize(12)
+                    .text(
+                        "No se encontraron préstamos con estos filtros."
+                    );
+            }
+
+            prestamos.forEach((prestamo, index) => {
+                if (
+                    documento.y >
+                    documento.page.height - 145
+                ) {
+                    documento.addPage();
+                }
+
+                documento
+                    .font("Helvetica-Bold")
+                    .fontSize(12)
+                    .fillColor("#0F7A8C")
+                    .text(
+                        `${index + 1}. ${prestamo.material}`
+                    );
+
+                documento
+                    .font("Helvetica")
+                    .fontSize(10)
+                    .fillColor("#222222")
+                    .text(
+                        `Préstamo ID: ${prestamo.id}`
+                    )
+                    .text(
+                        `Material ID: ${prestamo.material_id}`
+                    )
+                    .text(
+                        `Maestro: ${prestamo.maestro}`
+                    )
+                    .text(
+                        `Fecha préstamo: ${
+                            mostrarFechaReporte(
+                                prestamo.fecha_prestamo
+                            )
+                        }`
+                    )
+                    .text(
+                        `Fecha devolución: ${
+                            mostrarFechaReporte(
+                                prestamo.fecha_devolucion
+                            )
+                        }`
+                    )
+                    .text(
+                        `Estado: ${prestamo.estado}`
+                    );
+
+                documento.moveDown();
+                documento
+                    .strokeColor("#7FDBDA")
+                    .moveTo(45, documento.y)
+                    .lineTo(550, documento.y)
+                    .stroke();
+
+                documento.moveDown();
+            });
+
+            documento.end();
+        }
+    );
+});
+
+// =====================================================
+// EXPORTAR REPORTE A EXCEL
+// =====================================================
+
+app.get("/reportes/excel", (req, res) => {
+    const filtros = obtenerFiltrosReporte(req);
+    const errorFiltros = validarFiltrosReporte(filtros);
+
+    if (errorFiltros) {
+        return res.status(400).json({
+            status: "fail",
+            mensaje: errorFiltros
+        });
+    }
+
+    const consulta = construirConsultaReporte(filtros);
+
+    conexion.query(
+        consulta.sql,
+        consulta.parametros,
+        async (err, prestamos) => {
+            if (err) {
+                console.error(
+                    "Error generando reporte Excel:",
+                    err
+                );
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje:
+                        "Error al generar el reporte Excel"
+                });
+            }
+
+            try {
+                const libro = new ExcelJS.Workbook();
+
+                libro.creator = "Inventario Escolar";
+                libro.created = new Date();
+
+                const hojaFiltros =
+                    libro.addWorksheet("Filtros");
+
+                hojaFiltros.addRows([
+                    ["REPORTE FILTRADO DE PRÉSTAMOS"],
+                    [
+                        "Maestro",
+                        filtros.maestro || "Todos"
+                    ],
+                    [
+                        "Fecha inicial",
+                        filtros.fechaInicio || "Sin filtro"
+                    ],
+                    [
+                        "Fecha final",
+                        filtros.fechaFin || "Sin filtro"
+                    ],
+                    [
+                        "Total",
+                        prestamos.length
+                    ]
+                ]);
+
+                hojaFiltros.getCell("A1").font = {
+                    bold: true,
+                    size: 16,
+                    color: {
+                        argb: "FF0F7A8C"
+                    }
+                };
+
+                hojaFiltros.getColumn(1).width = 24;
+                hojaFiltros.getColumn(2).width = 30;
+
+                const hoja =
+                    libro.addWorksheet("Préstamos", {
+                        views: [
+                            {
+                                state: "frozen",
+                                ySplit: 1
+                            }
+                        ]
+                    });
+
+                hoja.columns = [
+                    {
+                        header: "ID",
+                        key: "id",
+                        width: 10
+                    },
+                    {
+                        header: "Material ID",
+                        key: "material_id",
+                        width: 14
+                    },
+                    {
+                        header: "Material",
+                        key: "material",
+                        width: 28
+                    },
+                    {
+                        header: "Maestro",
+                        key: "maestro",
+                        width: 22
+                    },
+                    {
+                        header: "Fecha préstamo",
+                        key: "fecha_prestamo",
+                        width: 22
+                    },
+                    {
+                        header: "Fecha devolución",
+                        key: "fecha_devolucion",
+                        width: 22
+                    },
+                    {
+                        header: "Estado",
+                        key: "estado",
+                        width: 15
+                    }
+                ];
+
+                prestamos.forEach((prestamo) => {
+                    hoja.addRow({
+                        id: prestamo.id,
+                        material_id:
+                            prestamo.material_id,
+                        material:
+                            prestamo.material,
+                        maestro:
+                            prestamo.maestro,
+                        fecha_prestamo:
+                            mostrarFechaReporte(
+                                prestamo.fecha_prestamo
+                            ),
+                        fecha_devolucion:
+                            mostrarFechaReporte(
+                                prestamo.fecha_devolucion
+                            ),
+                        estado:
+                            prestamo.estado
+                    });
+                });
+
+                const encabezado = hoja.getRow(1);
+
+                encabezado.font = {
+                    bold: true,
+                    color: {
+                        argb: "FFFFFFFF"
+                    }
+                };
+
+                encabezado.fill = {
+                    type: "pattern",
+                    pattern: "solid",
+                    fgColor: {
+                        argb: "FF17A6B8"
+                    }
+                };
+
+                encabezado.alignment = {
+                    vertical: "middle",
+                    horizontal: "center"
+                };
+
+                encabezado.height = 24;
+
+                hoja.autoFilter = {
+                    from: "A1",
+                    to: "G1"
+                };
+
+                hoja.eachRow((fila, numeroFila) => {
+                    fila.alignment = {
+                        vertical: "middle"
+                    };
+
+                    if (
+                        numeroFila > 1 &&
+                        numeroFila % 2 === 0
+                    ) {
+                        fila.fill = {
+                            type: "pattern",
+                            pattern: "solid",
+                            fgColor: {
+                                argb: "FFF3FCFB"
+                            }
+                        };
+                    }
+                });
+
+                res.setHeader(
+                    "Content-Type",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                );
+
+                res.setHeader(
+                    "Content-Disposition",
+                    'attachment; filename="reporte_prestamos.xlsx"'
+                );
+
+                await libro.xlsx.write(res);
+
+                return res.end();
+            } catch (errorExcel) {
+                console.error(
+                    "Error creando archivo Excel:",
+                    errorExcel
+                );
+
+                if (!res.headersSent) {
+                    return res.status(500).json({
+                        status: "error",
+                        mensaje:
+                            "Error al crear el archivo Excel"
+                    });
+                }
+
+                return res.end();
+            }
+        }
+    );
 });
 
 // =====================================================
