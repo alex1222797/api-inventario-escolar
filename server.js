@@ -207,7 +207,65 @@ app.post("/login", (req, res) => {
     );
 });
 
+// =====================================================
+// ASIGNAR PERMISOS A UN MAESTRO
+// =====================================================
 
+app.post("/permisos", (req, res) => {
+    const {
+        maestro,
+        material_id,
+        puede_ver,
+        puede_prestar,
+        puede_devolver
+    } = req.body;
+
+    if (!maestro || !material_id) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "El maestro y el material son obligatorios"
+        });
+    }
+
+    const sql = `
+        INSERT INTO permisos
+        (
+            maestro,
+            material_id,
+            puede_ver,
+            puede_prestar,
+            puede_devolver
+        )
+        VALUES (?, ?, ?, ?, ?)
+    `;
+
+    conexion.query(
+        sql,
+        [
+            maestro,
+            material_id,
+            puede_ver,
+            puede_prestar,
+            puede_devolver
+        ],
+        (err, result) => {
+            if (err) {
+                console.error("Error asignando permiso:", err);
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "Error al asignar el permiso"
+                });
+            }
+
+            return res.status(201).json({
+                status: "ok",
+                mensaje: "Permiso asignado",
+                id: result.insertId
+            });
+        }
+    );
+});
 // =====================================================
 // REGISTRAR PRÉSTAMO
 // =====================================================
