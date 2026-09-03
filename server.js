@@ -11,12 +11,13 @@ const fs = require("fs");
 const path = require("path");
 const PDFDocument = require("pdfkit");
 const ExcelJS = require("exceljs");
-
-// =====================================================
-// CREAR APLICACIÓN EXPRESS
-// =====================================================
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 
 const app = express();
+
+const JWT_SECRET =
+    process.env.JWT_SECRET || "clave_secreta_inventario_stockify";
 
 // =====================================================
 // MIDDLEWARES
@@ -24,6 +25,44 @@ const app = express();
 
 app.use(bodyParser.json());
 app.use(cors());
+
+function verificarToken(req, res, next) {
+    const authorization = req.headers.authorization || "";
+
+    const token = authorization.startsWith("Bearer ")
+        ? authorization.substring(7)
+        : authorization;
+
+    if (!token) {
+        return res.status(401).json({
+            status: "error",
+            mensaje: "Token requerido"
+        });
+    }
+
+    jwt.verify(token, JWT_SECRET, (err, decoded) => {
+        if (err) {
+            return res.status(401).json({
+                status: "error",
+                mensaje: "Token inválido o vencido"
+            });
+        }
+
+        req.usuario = decoded;
+        next();
+    });
+}
+
+function soloAdministrador(req, res, next) {
+    if (req.usuario.rol !== "administrador") {
+        return res.status(403).json({
+            status: "error",
+            mensaje: "Acceso exclusivo para administradores"
+        });
+    }
+
+    next();
+}
 
 // =====================================================
 // CONFIGURACIÓN DE CÓDIGOS QR
@@ -35,7 +74,6 @@ if (!fs.existsSync(carpetaQR)) {
     fs.mkdirSync(carpetaQR, { recursive: true });
 }
 
-// Permite abrir los códigos QR desde Render.
 app.use("/qrs", express.static(carpetaQR));
 
 async function generarQR(materialId) {
@@ -50,8 +88,6 @@ async function generarQR(materialId) {
         margin: 2,
         width: 300
     });
-
-    console.log(`QR generado en: ${ruta}`);
 
     return {
         nombreArchivo,
@@ -74,10 +110,6 @@ const conexion = mysql.createConnection({
         rejectUnauthorized: false
     }
 });
-
-// =====================================================
-// PROBAR CONEXIÓN
-// =====================================================
 
 conexion.connect((err) => {
     if (err) {
@@ -197,8 +229,6 @@ app.get("/materiales", (req, res) => {
 // =====================================================
 // GENERAR O CONSULTAR QR DE UN MATERIAL
 // =====================================================
-// Ejemplo:
-// GET /materiales/13/qr
 
 app.get("/materiales/:id/qr", (req, res) => {
     const materialId = Number(req.params.id);
@@ -219,7 +249,7 @@ app.get("/materiales/:id/qr", (req, res) => {
 
     conexion.query(sql, [materialId], async (err, result) => {
         if (err) {
-            console.error("Error consultando material para QR:", err);
+            console.error("Error consultando material:", err);
 
             return res.status(500).json({
                 status: "error",
@@ -250,7 +280,119 @@ app.get("/materiales/:id/qr", (req, res) => {
 });
 
 // =====================================================
-// LOGIN
+// GUÍA 13: REGISTRAR USUARIO SEGURO
+// Usa usuarios(id, usuario, clave, rol)
+// =====================================================
+
+app.post("/registro", (req, res) => {
+    const {
+        usuario,
+        clave,
+        rol
+    } = req.body;
+
+    if (!usuario || !clave) {
+        return res.status(400).json({
+            status: "fail",
+            mensaje: "Usuario y contraseña son obligatorios"
+        });
+    }
+
+    const usuarioLimpio = String(usuario).trim();
+    const rolFinal = rol || "maestro";
+
+    if (!["administrador", "maestro"].includes(rolFinal)) {
+        return res.status(400).json({
+            status: "fail",
+            mensaje: "El rol debe ser administrador o maestro"
+        });
+    }
+
+    const sqlBuscar = `
+        SELECT id
+        FROM usuarios
+        WHERE usuario = ?
+        LIMIT 1
+    `;
+
+    conexion.query(
+        sqlBuscar,
+        [usuarioLimpio],
+        async (err, result) => {
+            if (err) {
+                console.error("Error buscando usuario:", err);
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "Error interno del servidor"
+                });
+            }
+
+            if (result.length > 0) {
+                return res.status(409).json({
+                    status: "fail",
+                    mensaje: "Ese nombre de usuario ya existe"
+                });
+            }
+
+            try {
+                const claveCifrada = await bcrypt.hash(
+                    String(clave),
+                    10
+                );
+
+                const sqlRegistrar = `
+                    INSERT INTO usuarios
+                    (usuario, clave, rol)
+                    VALUES (?, ?, ?)
+                `;
+
+                conexion.query(
+                    sqlRegistrar,
+                    [
+                        usuarioLimpio,
+                        claveCifrada,
+                        rolFinal
+                    ],
+                    (errorRegistro, resultadoRegistro) => {
+                        if (errorRegistro) {
+                            console.error(
+                                "Error registrando usuario:",
+                                errorRegistro
+                            );
+
+                            return res.status(500).json({
+                                status: "error",
+                                mensaje:
+                                    "No se pudo registrar el usuario"
+                            });
+                        }
+
+                        return res.status(201).json({
+                            status: "ok",
+                            mensaje: "Usuario registrado",
+                            id: resultadoRegistro.insertId
+                        });
+                    }
+                );
+            } catch (error) {
+                console.error(
+                    "Error cifrando contraseña:",
+                    error
+                );
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "No se pudo registrar el usuario"
+                });
+            }
+        }
+    );
+});
+
+// =====================================================
+// GUÍA 13: LOGIN CON BCRYPT Y JWT
+// Migra automáticamente claves antiguas como 1234.
 // =====================================================
 
 app.post("/login", (req, res) => {
@@ -270,17 +412,17 @@ app.post("/login", (req, res) => {
         SELECT
             id,
             usuario,
+            clave,
             rol
         FROM usuarios
         WHERE usuario = ?
-        AND clave = ?
         LIMIT 1
     `;
 
     conexion.query(
         sql,
-        [usuario, clave],
-        (err, result) => {
+        [String(usuario).trim()],
+        async (err, result) => {
             if (err) {
                 console.error("Error en login:", err);
 
@@ -298,16 +440,107 @@ app.post("/login", (req, res) => {
             }
 
             const usuarioEncontrado = result[0];
+            const claveGuardada =
+                String(usuarioEncontrado.clave);
 
-            return res.status(200).json({
-                status: "ok",
-                id: usuarioEncontrado.id,
-                usuario: usuarioEncontrado.usuario,
-                rol: usuarioEncontrado.rol
-            });
+            const estaCifrada =
+                claveGuardada.startsWith("$2a$") ||
+                claveGuardada.startsWith("$2b$") ||
+                claveGuardada.startsWith("$2y$");
+
+            try {
+                const claveCorrecta = estaCifrada
+                    ? await bcrypt.compare(
+                        String(clave),
+                        claveGuardada
+                    )
+                    : String(clave) === claveGuardada;
+
+                if (!claveCorrecta) {
+                    return res.status(401).json({
+                        status: "fail",
+                        mensaje: "Credenciales incorrectas"
+                    });
+                }
+
+                // Convierte claves antiguas en texto plano a bcrypt.
+                if (!estaCifrada) {
+                    const claveCifrada =
+                        await bcrypt.hash(String(clave), 10);
+
+                    conexion.query(
+                        `
+                            UPDATE usuarios
+                            SET clave = ?
+                            WHERE id = ?
+                        `,
+                        [
+                            claveCifrada,
+                            usuarioEncontrado.id
+                        ],
+                        (errorActualizar) => {
+                            if (errorActualizar) {
+                                console.error(
+                                    "No se pudo cifrar la clave:",
+                                    errorActualizar
+                                );
+                            }
+                        }
+                    );
+                }
+
+                const token = jwt.sign(
+                    {
+                        id: usuarioEncontrado.id,
+                        usuario:
+                            usuarioEncontrado.usuario,
+                        rol: usuarioEncontrado.rol
+                    },
+                    JWT_SECRET,
+                    {
+                        expiresIn: "1h"
+                    }
+                );
+
+                return res.status(200).json({
+                    status: "ok",
+                    token,
+                    id: usuarioEncontrado.id,
+                    usuario:
+                        usuarioEncontrado.usuario,
+                    rol: usuarioEncontrado.rol
+                });
+            } catch (error) {
+                console.error(
+                    "Error validando contraseña:",
+                    error
+                );
+
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "No se pudo iniciar sesión"
+                });
+            }
         }
     );
 });
+
+// =====================================================
+// RUTA PROTEGIDA PARA ADMINISTRADORES
+// =====================================================
+
+app.get(
+    "/admin/reportes",
+    verificarToken,
+    soloAdministrador,
+    (req, res) => {
+        return res.status(200).json({
+            status: "ok",
+            mensaje: "Bienvenido administrador",
+            usuario: req.usuario.usuario
+        });
+    }
+);
 
 // =====================================================
 // ASIGNAR PERMISOS
@@ -387,7 +620,7 @@ app.post("/prestamos", (req, res) => {
         });
     }
 
-    const maestroLimpio = maestro.trim();
+    const maestroLimpio = String(maestro).trim();
 
     const sqlPermiso = `
         SELECT id
@@ -400,11 +633,14 @@ app.post("/prestamos", (req, res) => {
 
     conexion.query(
         sqlPermiso,
-        [maestroLimpio, material_id],
+        [
+            maestroLimpio,
+            material_id
+        ],
         (errPermiso, permisos) => {
             if (errPermiso) {
                 console.error(
-                    "Error consultando permiso de préstamo:",
+                    "Error consultando permisos:",
                     errPermiso
                 );
 
@@ -502,7 +738,6 @@ app.get("/prestamos", (req, res) => {
 // =====================================================
 // DEVOLVER MEDIANTE ID DEL PRÉSTAMO
 // =====================================================
-// Esta ruta se conserva para ListaPrestamos de Flutter.
 
 app.put("/prestamos/devolver/:id", (req, res) => {
     const idPrestamo = Number(req.params.id);
@@ -534,8 +769,7 @@ app.put("/prestamos/devolver/:id", (req, res) => {
         if (result.affectedRows === 0) {
             return res.status(404).json({
                 status: "fail",
-                mensaje:
-                    "Préstamo no encontrado o ya fue devuelto"
+                mensaje: "Préstamo no encontrado o ya fue devuelto"
             });
         }
 
@@ -547,7 +781,7 @@ app.put("/prestamos/devolver/:id", (req, res) => {
 });
 
 // =====================================================
-// ENTREGA MEDIANTE QR DEL MATERIAL
+// DEVOLVER MATERIAL MEDIANTE QR
 // =====================================================
 
 app.put(
@@ -581,18 +815,20 @@ app.put(
 
         conexion.query(
             sqlPermiso,
-            [maestro, materialId],
+            [
+                maestro,
+                materialId
+            ],
             (errPermiso, permisos) => {
                 if (errPermiso) {
                     console.error(
-                        "Error consultando permiso de devolución:",
+                        "Error consultando permisos:",
                         errPermiso
                     );
 
                     return res.status(500).json({
                         status: "error",
-                        mensaje:
-                            "Error al consultar los permisos"
+                        mensaje: "Error al consultar los permisos"
                     });
                 }
 
@@ -616,12 +852,15 @@ app.put(
 
                 conexion.query(
                     sqlEntrega,
-                    [materialId, maestro],
-                    (errEntrega, result) => {
-                        if (errEntrega) {
+                    [
+                        materialId,
+                        maestro
+                    ],
+                    (errorEntrega, result) => {
+                        if (errorEntrega) {
                             console.error(
-                                "Error registrando entrega mediante QR:",
-                                errEntrega
+                                "Error registrando entrega:",
+                                errorEntrega
                             );
 
                             return res.status(500).json({
@@ -682,8 +921,7 @@ app.get("/notificaciones/:maestro", (req, res) => {
 
             return res.status(500).json({
                 status: "error",
-                mensaje:
-                    "Error al obtener las notificaciones"
+                mensaje: "Error al obtener las notificaciones"
             });
         }
 
@@ -692,14 +930,17 @@ app.get("/notificaciones/:maestro", (req, res) => {
 });
 
 // =====================================================
-// CONSULTA PARA REPORTES FILTRADOS
+// FUNCIONES PARA REPORTES FILTRADOS
 // =====================================================
 
 function obtenerFiltrosReporte(req) {
     return {
-        maestro: req.query.maestro?.toString().trim() || "",
+        maestro:
+            req.query.maestro?.toString().trim() || "",
+
         fechaInicio:
             req.query.fecha_inicio?.toString().trim() || "",
+
         fechaFin:
             req.query.fecha_fin?.toString().trim() || ""
     };
@@ -742,14 +983,18 @@ function construirConsultaReporte(filtros) {
             p.maestro,
             p.fecha_prestamo,
             p.fecha_devolucion,
+
             CASE
                 WHEN p.fecha_devolucion IS NULL
                     THEN 'Pendiente'
                 ELSE 'Devuelto'
             END AS estado
+
         FROM prestamos p
+
         INNER JOIN materiales m
             ON p.material_id = m.id
+
         WHERE 1 = 1
     `;
 
@@ -770,7 +1015,9 @@ function construirConsultaReporte(filtros) {
         parametros.push(filtros.fechaFin);
     }
 
-    sql += " ORDER BY p.fecha_prestamo DESC, p.id DESC";
+    sql += `
+        ORDER BY p.fecha_prestamo DESC, p.id DESC
+    `;
 
     return {
         sql,
@@ -789,26 +1036,20 @@ function mostrarFechaReporte(valor) {
         return String(valor);
     }
 
-    const dia = fecha
-        .getDate()
-        .toString()
-        .padStart(2, "0");
+    const dia =
+        String(fecha.getDate()).padStart(2, "0");
 
-    const mes = (fecha.getMonth() + 1)
-        .toString()
-        .padStart(2, "0");
+    const mes =
+        String(fecha.getMonth() + 1).padStart(2, "0");
 
-    const anio = fecha.getFullYear();
+    const anio =
+        fecha.getFullYear();
 
-    const hora = fecha
-        .getHours()
-        .toString()
-        .padStart(2, "0");
+    const hora =
+        String(fecha.getHours()).padStart(2, "0");
 
-    const minuto = fecha
-        .getMinutes()
-        .toString()
-        .padStart(2, "0");
+    const minuto =
+        String(fecha.getMinutes()).padStart(2, "0");
 
     return `${dia}/${mes}/${anio} ${hora}:${minuto}`;
 }
@@ -819,7 +1060,8 @@ function mostrarFechaReporte(valor) {
 
 app.get("/reportes/filtrados", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
-    const errorFiltros = validarFiltrosReporte(filtros);
+    const errorFiltros =
+        validarFiltrosReporte(filtros);
 
     if (errorFiltros) {
         return res.status(400).json({
@@ -828,7 +1070,8 @@ app.get("/reportes/filtrados", (req, res) => {
         });
     }
 
-    const consulta = construirConsultaReporte(filtros);
+    const consulta =
+        construirConsultaReporte(filtros);
 
     conexion.query(
         consulta.sql,
@@ -836,7 +1079,7 @@ app.get("/reportes/filtrados", (req, res) => {
         (err, result) => {
             if (err) {
                 console.error(
-                    "Error obteniendo reporte filtrado:",
+                    "Error obteniendo reporte:",
                     err
                 );
 
@@ -863,7 +1106,8 @@ app.get("/reportes/filtrados", (req, res) => {
 
 app.get("/reportes/pdf", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
-    const errorFiltros = validarFiltrosReporte(filtros);
+    const errorFiltros =
+        validarFiltrosReporte(filtros);
 
     if (errorFiltros) {
         return res.status(400).json({
@@ -872,7 +1116,8 @@ app.get("/reportes/pdf", (req, res) => {
         });
     }
 
-    const consulta = construirConsultaReporte(filtros);
+    const consulta =
+        construirConsultaReporte(filtros);
 
     conexion.query(
         consulta.sql,
@@ -886,7 +1131,8 @@ app.get("/reportes/pdf", (req, res) => {
 
                 return res.status(500).json({
                     status: "error",
-                    mensaje: "Error al generar el reporte PDF"
+                    mensaje:
+                        "Error al generar el reporte PDF"
                 });
             }
 
@@ -900,14 +1146,11 @@ app.get("/reportes/pdf", (req, res) => {
                 'attachment; filename="reporte_prestamos.pdf"'
             );
 
-            const documento = new PDFDocument({
-                size: "A4",
-                margin: 45,
-                info: {
-                    Title: "Reporte de préstamos",
-                    Author: "Inventario Escolar"
-                }
-            });
+            const documento =
+                new PDFDocument({
+                    size: "A4",
+                    margin: 45
+                });
 
             documento.pipe(res);
 
@@ -917,14 +1160,18 @@ app.get("/reportes/pdf", (req, res) => {
                 .fillColor("#0F7A8C")
                 .text(
                     "Inventario Escolar",
-                    { align: "center" }
+                    {
+                        align: "center"
+                    }
                 );
 
             documento
                 .fontSize(16)
                 .text(
                     "Reporte filtrado de préstamos",
-                    { align: "center" }
+                    {
+                        align: "center"
+                    }
                 );
 
             documento.moveDown();
@@ -932,92 +1179,93 @@ app.get("/reportes/pdf", (req, res) => {
             documento
                 .font("Helvetica")
                 .fontSize(10)
-                .fillColor("#222222")
-                .text(
-                    `Maestro: ${
-                        filtros.maestro || "Todos"
-                    }`
-                )
-                .text(
-                    `Fecha inicial: ${
-                        filtros.fechaInicio || "Sin filtro"
-                    }`
-                )
-                .text(
-                    `Fecha final: ${
-                        filtros.fechaFin || "Sin filtro"
-                    }`
-                )
-                .text(
-                    `Total de registros: ${prestamos.length}`
-                );
+                .fillColor("#222222");
+
+            documento.text(
+                `Maestro: ${filtros.maestro || "Todos"}`
+            );
+
+            documento.text(
+                `Fecha inicial: ${
+                    filtros.fechaInicio || "Sin filtro"
+                }`
+            );
+
+            documento.text(
+                `Fecha final: ${
+                    filtros.fechaFin || "Sin filtro"
+                }`
+            );
+
+            documento.text(
+                `Total de registros: ${prestamos.length}`
+            );
 
             documento.moveDown();
 
             if (prestamos.length === 0) {
-                documento
-                    .fontSize(12)
-                    .text(
-                        "No se encontraron préstamos con estos filtros."
-                    );
+                documento.text(
+                    "No se encontraron préstamos con estos filtros."
+                );
             }
 
-            prestamos.forEach((prestamo, index) => {
-                if (
-                    documento.y >
-                    documento.page.height - 145
-                ) {
-                    documento.addPage();
-                }
+            prestamos.forEach(
+                (prestamo, index) => {
+                    if (
+                        documento.y >
+                        documento.page.height - 145
+                    ) {
+                        documento.addPage();
+                    }
 
-                documento
-                    .font("Helvetica-Bold")
-                    .fontSize(12)
-                    .fillColor("#0F7A8C")
-                    .text(
-                        `${index + 1}. ${prestamo.material}`
+                    documento
+                        .font("Helvetica-Bold")
+                        .fontSize(12)
+                        .fillColor("#0F7A8C")
+                        .text(
+                            `${index + 1}. ${prestamo.material}`
+                        );
+
+                    documento
+                        .font("Helvetica")
+                        .fontSize(10)
+                        .fillColor("#222222");
+
+                    documento.text(
+                        `Préstamo ID: ${prestamo.id}`
                     );
 
-                documento
-                    .font("Helvetica")
-                    .fontSize(10)
-                    .fillColor("#222222")
-                    .text(
-                        `Préstamo ID: ${prestamo.id}`
-                    )
-                    .text(
+                    documento.text(
                         `Material ID: ${prestamo.material_id}`
-                    )
-                    .text(
+                    );
+
+                    documento.text(
                         `Maestro: ${prestamo.maestro}`
-                    )
-                    .text(
+                    );
+
+                    documento.text(
                         `Fecha préstamo: ${
                             mostrarFechaReporte(
                                 prestamo.fecha_prestamo
                             )
                         }`
-                    )
-                    .text(
+                    );
+
+                    documento.text(
                         `Fecha devolución: ${
                             mostrarFechaReporte(
                                 prestamo.fecha_devolucion
                             )
                         }`
-                    )
-                    .text(
+                    );
+
+                    documento.text(
                         `Estado: ${prestamo.estado}`
                     );
 
-                documento.moveDown();
-                documento
-                    .strokeColor("#7FDBDA")
-                    .moveTo(45, documento.y)
-                    .lineTo(550, documento.y)
-                    .stroke();
-
-                documento.moveDown();
-            });
+                    documento.moveDown();
+                }
+            );
 
             documento.end();
         }
@@ -1030,7 +1278,8 @@ app.get("/reportes/pdf", (req, res) => {
 
 app.get("/reportes/excel", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
-    const errorFiltros = validarFiltrosReporte(filtros);
+    const errorFiltros =
+        validarFiltrosReporte(filtros);
 
     if (errorFiltros) {
         return res.status(400).json({
@@ -1039,7 +1288,8 @@ app.get("/reportes/excel", (req, res) => {
         });
     }
 
-    const consulta = construirConsultaReporte(filtros);
+    const consulta =
+        construirConsultaReporte(filtros);
 
     conexion.query(
         consulta.sql,
@@ -1047,7 +1297,7 @@ app.get("/reportes/excel", (req, res) => {
         async (err, prestamos) => {
             if (err) {
                 console.error(
-                    "Error generando reporte Excel:",
+                    "Error generando Excel:",
                     err
                 );
 
@@ -1059,54 +1309,17 @@ app.get("/reportes/excel", (req, res) => {
             }
 
             try {
-                const libro = new ExcelJS.Workbook();
+                const libro =
+                    new ExcelJS.Workbook();
 
-                libro.creator = "Inventario Escolar";
-                libro.created = new Date();
+                libro.creator =
+                    "Inventario Escolar";
 
-                const hojaFiltros =
-                    libro.addWorksheet("Filtros");
-
-                hojaFiltros.addRows([
-                    ["REPORTE FILTRADO DE PRÉSTAMOS"],
-                    [
-                        "Maestro",
-                        filtros.maestro || "Todos"
-                    ],
-                    [
-                        "Fecha inicial",
-                        filtros.fechaInicio || "Sin filtro"
-                    ],
-                    [
-                        "Fecha final",
-                        filtros.fechaFin || "Sin filtro"
-                    ],
-                    [
-                        "Total",
-                        prestamos.length
-                    ]
-                ]);
-
-                hojaFiltros.getCell("A1").font = {
-                    bold: true,
-                    size: 16,
-                    color: {
-                        argb: "FF0F7A8C"
-                    }
-                };
-
-                hojaFiltros.getColumn(1).width = 24;
-                hojaFiltros.getColumn(2).width = 30;
+                libro.created =
+                    new Date();
 
                 const hoja =
-                    libro.addWorksheet("Préstamos", {
-                        views: [
-                            {
-                                state: "frozen",
-                                ySplit: 1
-                            }
-                        ]
-                    });
+                    libro.addWorksheet("Préstamos");
 
                 hoja.columns = [
                     {
@@ -1148,27 +1361,35 @@ app.get("/reportes/excel", (req, res) => {
 
                 prestamos.forEach((prestamo) => {
                     hoja.addRow({
-                        id: prestamo.id,
+                        id:
+                            prestamo.id,
+
                         material_id:
                             prestamo.material_id,
+
                         material:
                             prestamo.material,
+
                         maestro:
                             prestamo.maestro,
+
                         fecha_prestamo:
                             mostrarFechaReporte(
                                 prestamo.fecha_prestamo
                             ),
+
                         fecha_devolucion:
                             mostrarFechaReporte(
                                 prestamo.fecha_devolucion
                             ),
+
                         estado:
                             prestamo.estado
                     });
                 });
 
-                const encabezado = hoja.getRow(1);
+                const encabezado =
+                    hoja.getRow(1);
 
                 encabezado.font = {
                     bold: true,
@@ -1190,31 +1411,10 @@ app.get("/reportes/excel", (req, res) => {
                     horizontal: "center"
                 };
 
-                encabezado.height = 24;
-
                 hoja.autoFilter = {
                     from: "A1",
                     to: "G1"
                 };
-
-                hoja.eachRow((fila, numeroFila) => {
-                    fila.alignment = {
-                        vertical: "middle"
-                    };
-
-                    if (
-                        numeroFila > 1 &&
-                        numeroFila % 2 === 0
-                    ) {
-                        fila.fill = {
-                            type: "pattern",
-                            pattern: "solid",
-                            fgColor: {
-                                argb: "FFF3FCFB"
-                            }
-                        };
-                    }
-                });
 
                 res.setHeader(
                     "Content-Type",
@@ -1231,7 +1431,7 @@ app.get("/reportes/excel", (req, res) => {
                 return res.end();
             } catch (errorExcel) {
                 console.error(
-                    "Error creando archivo Excel:",
+                    "Error creando Excel:",
                     errorExcel
                 );
 
@@ -1261,11 +1461,6 @@ app.get("/reportes/total", (req, res) => {
 
     conexion.query(sql, (err, result) => {
         if (err) {
-            console.error(
-                "Error obteniendo total de préstamos:",
-                err
-            );
-
             return res.status(500).json({
                 status: "error",
                 mensaje:
@@ -1293,11 +1488,6 @@ app.get("/reportes/pendientes", (req, res) => {
 
     conexion.query(sql, (err, result) => {
         if (err) {
-            console.error(
-                "Error obteniendo préstamos pendientes:",
-                err
-            );
-
             return res.status(500).json({
                 status: "error",
                 mensaje:
@@ -1307,7 +1497,8 @@ app.get("/reportes/pendientes", (req, res) => {
 
         return res.status(200).json({
             status: "ok",
-            pendientes: result[0].pendientes
+            pendientes:
+                result[0].pendientes
         });
     });
 });
@@ -1325,11 +1516,6 @@ app.get("/reportes/devueltos", (req, res) => {
 
     conexion.query(sql, (err, result) => {
         if (err) {
-            console.error(
-                "Error obteniendo préstamos devueltos:",
-                err
-            );
-
             return res.status(500).json({
                 status: "error",
                 mensaje:
@@ -1339,7 +1525,8 @@ app.get("/reportes/devueltos", (req, res) => {
 
         return res.status(200).json({
             status: "ok",
-            devueltos: result[0].devueltos
+            devueltos:
+                result[0].devueltos
         });
     });
 });
@@ -1359,12 +1546,19 @@ app.use((req, res) => {
 // INICIAR SERVIDOR
 // =====================================================
 
-const PORT = process.env.PORT || 3000;
+const PORT =
+    process.env.PORT || 3000;
 
-app.listen(PORT, "0.0.0.0", () => {
-    console.log("--------------------------------");
-    console.log(" INVENTARIO API");
-    console.log("--------------------------------");
-    console.log(`Servidor iniciado en puerto ${PORT}`);
-    console.log("--------------------------------");
-});
+app.listen(
+    PORT,
+    "0.0.0.0",
+    () => {
+        console.log("--------------------------------");
+        console.log(" INVENTARIO API");
+        console.log("--------------------------------");
+        console.log(
+            `Servidor iniciado en puerto ${PORT}`
+        );
+        console.log("--------------------------------");
+    }
+);
