@@ -7,13 +7,11 @@ const mysql = require("mysql2");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 
-
 // =====================================================
 // CREAR APLICACIÓN EXPRESS
 // =====================================================
 
 const app = express();
-
 
 // =====================================================
 // MIDDLEWARES
@@ -21,7 +19,6 @@ const app = express();
 
 app.use(bodyParser.json());
 app.use(cors());
-
 
 // =====================================================
 // CONEXIÓN A AIVEN MYSQL
@@ -39,7 +36,6 @@ const conexion = mysql.createConnection({
     }
 });
 
-
 // =====================================================
 // PROBAR CONEXIÓN
 // =====================================================
@@ -53,7 +49,6 @@ conexion.connect((err) => {
     console.log("Conectado correctamente a Aiven MySQL");
 });
 
-
 // =====================================================
 // RUTA PRINCIPAL
 // =====================================================
@@ -64,7 +59,6 @@ app.get("/", (req, res) => {
         mensaje: "Inventario API funcionando"
     });
 });
-
 
 // =====================================================
 // REGISTRAR MATERIAL
@@ -112,7 +106,6 @@ app.post("/materiales", (req, res) => {
     );
 });
 
-
 // =====================================================
 // OBTENER MATERIALES
 // =====================================================
@@ -145,7 +138,6 @@ app.get("/materiales", (req, res) => {
     });
 });
 
-
 // =====================================================
 // LOGIN
 // =====================================================
@@ -160,7 +152,6 @@ app.post("/login", (req, res) => {
         return res.status(400).json({
             status: "fail",
             mensaje: "Usuario y contraseña son obligatorios"
-       
         });
     }
 
@@ -266,8 +257,9 @@ app.post("/permisos", (req, res) => {
         }
     );
 });
+
 // =====================================================
-// REGISTRAR PRÉSTAMO
+// REGISTRAR PRÉSTAMO VALIDANDO PERMISOS
 // =====================================================
 // La fecha de devolución no se registra aquí.
 // MySQL la dejará como NULL.
@@ -286,38 +278,76 @@ app.post("/prestamos", (req, res) => {
         });
     }
 
-    const sql = `
-        INSERT INTO prestamos
-        (
-            material_id,
-            fecha_prestamo,
-            maestro
-        )
-        VALUES (?, ?, ?)
+    const maestroLimpio = maestro.trim();
+
+    const sqlPermiso = `
+        SELECT id
+        FROM permisos
+        WHERE maestro = ?
+        AND material_id = ?
+        AND puede_prestar = TRUE
+        LIMIT 1
     `;
 
     conexion.query(
-        sql,
-        [material_id, fecha_prestamo, maestro],
-        (err, result) => {
-            if (err) {
-                console.error("Error registrando préstamo:", err);
+        sqlPermiso,
+        [maestroLimpio, material_id],
+        (errPermiso, permisos) => {
+            if (errPermiso) {
+                console.error(
+                    "Error consultando permiso de préstamo:",
+                    errPermiso
+                );
 
                 return res.status(500).json({
                     status: "error",
-                    mensaje: "Error al registrar préstamo"
+                    mensaje: "Error al consultar los permisos"
                 });
             }
 
-            return res.status(201).json({
-                status: "ok",
-                mensaje: "Préstamo registrado",
-                id: result.insertId
-            });
+            if (permisos.length === 0) {
+                return res.status(403).json({
+                    status: "fail",
+                    mensaje: "No tienes permiso para prestar este material"
+                });
+            }
+
+            const sqlPrestamo = `
+                INSERT INTO prestamos
+                (
+                    material_id,
+                    fecha_prestamo,
+                    maestro
+                )
+                VALUES (?, ?, ?)
+            `;
+
+            conexion.query(
+                sqlPrestamo,
+                [material_id, fecha_prestamo, maestroLimpio],
+                (errPrestamo, result) => {
+                    if (errPrestamo) {
+                        console.error(
+                            "Error registrando préstamo:",
+                            errPrestamo
+                        );
+
+                        return res.status(500).json({
+                            status: "error",
+                            mensaje: "Error al registrar préstamo"
+                        });
+                    }
+
+                    return res.status(201).json({
+                        status: "ok",
+                        mensaje: "Préstamo registrado",
+                        id: result.insertId
+                    });
+                }
+            );
         }
     );
 });
-
 
 // =====================================================
 // OBTENER PRÉSTAMOS
@@ -355,14 +385,11 @@ app.get("/prestamos", (req, res) => {
     });
 });
 
-
 // =====================================================
 // MARCAR MATERIAL COMO DEVUELTO
 // =====================================================
 // Ejemplo:
 // PUT /prestamos/devolver/1
-//
-// Este endpoint no necesita body.
 
 app.put("/prestamos/devolver/:id", (req, res) => {
     const idPrestamo = Number(req.params.id);
@@ -404,12 +431,9 @@ app.put("/prestamos/devolver/:id", (req, res) => {
     });
 });
 
-
 // =====================================================
 // NOTIFICACIONES PENDIENTES POR MAESTRO
 // =====================================================
-// Ejemplo:
-// GET /notificaciones/Juan%20Pérez
 
 app.get("/notificaciones/:maestro", (req, res) => {
     const maestro = req.params.maestro.trim();
@@ -443,7 +467,6 @@ app.get("/notificaciones/:maestro", (req, res) => {
     });
 });
 
-
 // =====================================================
 // REPORTE: TOTAL DE PRÉSTAMOS
 // =====================================================
@@ -473,7 +496,6 @@ app.get("/reportes/total", (req, res) => {
         });
     });
 });
-
 
 // =====================================================
 // REPORTE: PRÉSTAMOS PENDIENTES
@@ -506,7 +528,6 @@ app.get("/reportes/pendientes", (req, res) => {
     });
 });
 
-
 // =====================================================
 // REPORTE: PRÉSTAMOS DEVUELTOS
 // =====================================================
@@ -538,7 +559,6 @@ app.get("/reportes/devueltos", (req, res) => {
     });
 });
 
-
 // =====================================================
 // RUTA NO ENCONTRADA
 // =====================================================
@@ -549,7 +569,6 @@ app.use((req, res) => {
         mensaje: "Ruta no encontrada"
     });
 });
-
 
 // =====================================================
 // INICIAR SERVIDOR
