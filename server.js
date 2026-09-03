@@ -281,7 +281,6 @@ app.get("/materiales/:id/qr", (req, res) => {
 
 // =====================================================
 // GUÍA 13: REGISTRAR USUARIO SEGURO
-// Usa usuarios(id, usuario, clave, rol)
 // =====================================================
 
 app.post("/registro", (req, res) => {
@@ -392,7 +391,6 @@ app.post("/registro", (req, res) => {
 
 // =====================================================
 // GUÍA 13: LOGIN CON BCRYPT Y JWT
-// Migra automáticamente claves antiguas como 1234.
 // =====================================================
 
 app.post("/login", (req, res) => {
@@ -463,7 +461,6 @@ app.post("/login", (req, res) => {
                     });
                 }
 
-                // Convierte claves antiguas en texto plano a bcrypt.
                 if (!estaCifrada) {
                     const claveCifrada =
                         await bcrypt.hash(String(clave), 10);
@@ -1060,6 +1057,7 @@ function mostrarFechaReporte(valor) {
 
 app.get("/reportes/filtrados", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
+
     const errorFiltros =
         validarFiltrosReporte(filtros);
 
@@ -1106,6 +1104,7 @@ app.get("/reportes/filtrados", (req, res) => {
 
 app.get("/reportes/pdf", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
+
     const errorFiltros =
         validarFiltrosReporte(filtros);
 
@@ -1278,6 +1277,7 @@ app.get("/reportes/pdf", (req, res) => {
 
 app.get("/reportes/excel", (req, res) => {
     const filtros = obtenerFiltrosReporte(req);
+
     const errorFiltros =
         validarFiltrosReporte(filtros);
 
@@ -1527,6 +1527,67 @@ app.get("/reportes/devueltos", (req, res) => {
             status: "ok",
             devueltos:
                 result[0].devueltos
+        });
+    });
+});
+
+// =====================================================
+// GUÍA 14: MÉTRICAS DEL DASHBOARD
+// =====================================================
+
+app.get("/dashboard", (req, res) => {
+    const sql = `
+        SELECT
+            (
+                SELECT COUNT(*)
+                FROM materiales
+            ) AS total_materiales,
+
+            (
+                SELECT COUNT(*)
+                FROM prestamos
+                WHERE fecha_devolucion IS NULL
+            ) AS prestados,
+
+            (
+                SELECT COUNT(*)
+                FROM prestamos
+                WHERE fecha_devolucion IS NOT NULL
+            ) AS devueltos,
+
+            (
+                SELECT COUNT(*)
+                FROM materiales
+                WHERE LOWER(TRIM(estado)) = 'dañado'
+            ) AS danados
+    `;
+
+    conexion.query(sql, (err, result) => {
+        if (err) {
+            console.error(
+                "Error obteniendo métricas del dashboard:",
+                err
+            );
+
+            return res.status(500).json({
+                status: "error",
+                mensaje:
+                    "Error al obtener las métricas del dashboard"
+            });
+        }
+
+        return res.status(200).json({
+            total_materiales:
+                Number(result[0].total_materiales),
+
+            prestados:
+                Number(result[0].prestados),
+
+            devueltos:
+                Number(result[0].devueltos),
+
+            danados:
+                Number(result[0].danados)
         });
     });
 });
