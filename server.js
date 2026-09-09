@@ -9,6 +9,7 @@ const PDFDocument = require("pdfkit");
 const ExcelJS = require("exceljs");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const multer = require("multer");
 
 const app = express();
 
@@ -74,6 +75,66 @@ if (!fs.existsSync(carpetaQR)) {
 
 app.use("/qrs", express.static(carpetaQR));
 
+// =====================================================
+// GUÍA 16: CONFIGURACIÓN PARA SUBIR FOTOS
+// =====================================================
+
+const carpetaUploads = path.join(__dirname, "uploads");
+
+if (!fs.existsSync(carpetaUploads)) {
+    fs.mkdirSync(carpetaUploads, {
+        recursive: true
+    });
+}
+
+app.use("/uploads", express.static(carpetaUploads));
+
+const almacenamientoFotos = multer.diskStorage({
+    destination: (req, file, callback) => {
+        callback(null, carpetaUploads);
+    },
+    filename: (req, file, callback) => {
+        const extension = path.extname(file.originalname).toLowerCase();
+        const nombreSeguro =
+            `material-${Date.now()}-${Math.round(Math.random() * 1000000000)}${extension}`;
+
+        callback(null, nombreSeguro);
+    }
+});
+
+const upload = multer({
+    storage: almacenamientoFotos,
+    limits: {
+        fileSize: 5 * 1024 * 1024
+    },
+    fileFilter: (req, file, callback) => {
+        if (!file.mimetype.startsWith("image/")) {
+            return callback(
+                new Error("Solo se permiten archivos de imagen")
+            );
+        }
+
+        callback(null, true);
+    }
+});
+
+function eliminarFotoLocal(foto) {
+    if (!foto || !String(foto).startsWith("/uploads/")) {
+        return;
+    }
+
+    const rutaFoto = path.join(
+        carpetaUploads,
+        path.basename(String(foto))
+    );
+
+    fs.unlink(rutaFoto, (err) => {
+        if (err && err.code !== "ENOENT") {
+            console.error("No se pudo eliminar la foto:", err);
+        }
+    });
+}
+
 async function generarQR(materialId) {
     const nombreArchivo = `${materialId}.png`;
     const ruta = path.join(carpetaQR, nombreArchivo);
@@ -132,32 +193,59 @@ app.get("/", (req, res) => {
 // REGISTRAR MATERIAL
 // =====================================================
 
-app.post("/materiales", (req, res) => {
+app.post("/materiales", upload.single("foto"), (req, res) => {
     const {
         nombre,
+        categoria,
         cantidad,
         estado
     } = req.body;
 
-    if (!nombre || cantidad === undefined || !estado) {
+    const cantidadNumero = Number(cantidad);
+    const foto = req.file
+        ? `/uploads/${req.file.filename}`
+        : null;
+
+    if (
+        !nombre ||
+        !categoria ||
+        !Number.isInteger(cantidadNumero) ||
+        cantidadNumero < 0 ||
+        !estado
+    ) {
+        if (req.file) {
+            fs.unlink(req.file.path, () => {});
+        }
+
         return res.status(400).json({
             status: "error",
-            mensaje: "Faltan datos obligatorios"
+            mensaje:
+                "Nombre, categoría, cantidad y estado son obligatorios"
         });
     }
 
     const sql = `
         INSERT INTO materiales
-        (nombre, cantidad, estado)
-        VALUES (?, ?, ?)
+        (nombre, categoria, cantidad, estado, foto)
+        VALUES (?, ?, ?, ?, ?)
     `;
 
     conexion.query(
         sql,
-        [nombre, cantidad, estado],
+        [
+            String(nombre).trim(),
+            String(categoria).trim(),
+            cantidadNumero,
+            String(estado).trim(),
+            foto
+        ],
         async (err, result) => {
             if (err) {
                 console.error("Error registrando material:", err);
+
+                if (req.file) {
+                    fs.unlink(req.file.path, () => {});
+                }
 
                 return res.status(500).json({
                     status: "error",
@@ -165,28 +253,26 @@ app.post("/materiales", (req, res) => {
                 });
             }
 
+            let qrUrl = null;
+
             try {
                 const qr = await generarQR(result.insertId);
-
-                const qrUrl =
+                qrUrl =
                     `${req.protocol}://${req.get("host")}/qrs/${qr.nombreArchivo}`;
-
-                return res.status(201).json({
-                    status: "ok",
-                    mensaje: "Material registrado y QR generado",
-                    id: result.insertId,
-                    qr_url: qrUrl
-                });
             } catch (errorQR) {
                 console.error("Error generando QR:", errorQR);
-
-                return res.status(201).json({
-                    status: "ok",
-                    mensaje:
-                        "Material registrado, pero no se pudo generar el QR",
-                    id: result.insertId
-                });
             }
+
+            return res.status(201).json({
+                status: "ok",
+                mensaje: "Material agregado con foto y categoría",
+                id: result.insertId,
+                foto,
+                foto_url: foto
+                    ? `${req.protocol}://${req.get("host")}${foto}`
+                    : null,
+                qr_url: qrUrl
+            });
         }
     );
 });
@@ -200,8 +286,10 @@ app.get("/materiales", (req, res) => {
         SELECT
             id,
             nombre,
+            categoria,
             cantidad,
-            estado
+            estado,
+            foto
         FROM materiales
         ORDER BY nombre ASC
     `;
@@ -221,6 +309,225 @@ app.get("/materiales", (req, res) => {
             materiales: result
         });
     });
+});
+
+// =====================================================
+// GUÍA 16: EDITAR MATERIAL
+// =====================================================
+
+app.put("/materiales/:id", upload.single("foto"), (req, res) => {
+    const materialId = Number(req.params.id);
+
+    if (!Number.isInteger(materialId) || materialId <= 0) {
+        if (req.file) {
+            fs.unlink(req.file.path, () => {});
+        }
+
+        return res.status(400).json({
+            status: "error",
+            mensaje: "El ID del material no es válido"
+        });
+    }
+
+    const sqlBuscar = `
+        SELECT
+            nombre,
+            categoria,
+            cantidad,
+            estado,
+            foto
+        FROM materiales
+        WHERE id = ?
+        LIMIT 1
+    `;
+
+    conexion.query(sqlBuscar, [materialId], (errorBuscar, materiales) => {
+        if (errorBuscar) {
+            if (req.file) {
+                fs.unlink(req.file.path, () => {});
+            }
+
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al consultar el material"
+            });
+        }
+
+        if (materiales.length === 0) {
+            if (req.file) {
+                fs.unlink(req.file.path, () => {});
+            }
+
+            return res.status(404).json({
+                status: "fail",
+                mensaje: "Material no encontrado"
+            });
+        }
+
+        const materialActual = materiales[0];
+        const cantidadNumero = req.body.cantidad !== undefined
+            ? Number(req.body.cantidad)
+            : Number(materialActual.cantidad);
+
+        const nombreFinal =
+            req.body.nombre?.toString().trim() || materialActual.nombre;
+
+        const categoriaFinal =
+            req.body.categoria?.toString().trim() ||
+            materialActual.categoria;
+
+        const estadoFinal =
+            req.body.estado?.toString().trim() || materialActual.estado;
+
+        const fotoFinal = req.file
+            ? `/uploads/${req.file.filename}`
+            : materialActual.foto;
+
+        if (
+            !nombreFinal ||
+            !categoriaFinal ||
+            !Number.isInteger(cantidadNumero) ||
+            cantidadNumero < 0 ||
+            !estadoFinal
+        ) {
+            if (req.file) {
+                fs.unlink(req.file.path, () => {});
+            }
+
+            return res.status(400).json({
+                status: "error",
+                mensaje: "Los datos del material no son válidos"
+            });
+        }
+
+        const sqlActualizar = `
+            UPDATE materiales
+            SET
+                nombre = ?,
+                categoria = ?,
+                cantidad = ?,
+                estado = ?,
+                foto = ?
+            WHERE id = ?
+        `;
+
+        conexion.query(
+            sqlActualizar,
+            [
+                nombreFinal,
+                categoriaFinal,
+                cantidadNumero,
+                estadoFinal,
+                fotoFinal,
+                materialId
+            ],
+            (errorActualizar) => {
+                if (errorActualizar) {
+                    console.error(
+                        "Error actualizando material:",
+                        errorActualizar
+                    );
+
+                    if (req.file) {
+                        fs.unlink(req.file.path, () => {});
+                    }
+
+                    return res.status(500).json({
+                        status: "error",
+                        mensaje: "Error al actualizar el material"
+                    });
+                }
+
+                if (req.file && materialActual.foto) {
+                    eliminarFotoLocal(materialActual.foto);
+                }
+
+                return res.status(200).json({
+                    status: "ok",
+                    mensaje: "Material actualizado",
+                    foto: fotoFinal,
+                    foto_url: fotoFinal
+                        ? `${req.protocol}://${req.get("host")}${fotoFinal}`
+                        : null
+                });
+            }
+        );
+    });
+});
+
+// =====================================================
+// GUÍA 16: ELIMINAR MATERIAL
+// =====================================================
+
+app.delete("/materiales/:id", (req, res) => {
+    const materialId = Number(req.params.id);
+
+    if (!Number.isInteger(materialId) || materialId <= 0) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "El ID del material no es válido"
+        });
+    }
+
+    conexion.query(
+        "SELECT foto FROM materiales WHERE id = ? LIMIT 1",
+        [materialId],
+        (errorBuscar, materiales) => {
+            if (errorBuscar) {
+                return res.status(500).json({
+                    status: "error",
+                    mensaje: "Error al consultar el material"
+                });
+            }
+
+            if (materiales.length === 0) {
+                return res.status(404).json({
+                    status: "fail",
+                    mensaje: "Material no encontrado"
+                });
+            }
+
+            conexion.query(
+                "DELETE FROM materiales WHERE id = ?",
+                [materialId],
+                (errorEliminar, result) => {
+                    if (errorEliminar) {
+                        console.error(
+                            "Error eliminando material:",
+                            errorEliminar
+                        );
+
+                        if (errorEliminar.code === "ER_ROW_IS_REFERENCED_2") {
+                            return res.status(409).json({
+                                status: "fail",
+                                mensaje:
+                                    "No se puede eliminar porque el material tiene préstamos o permisos relacionados"
+                            });
+                        }
+
+                        return res.status(500).json({
+                            status: "error",
+                            mensaje: "Error al eliminar el material"
+                        });
+                    }
+
+                    if (result.affectedRows === 0) {
+                        return res.status(404).json({
+                            status: "fail",
+                            mensaje: "Material no encontrado"
+                        });
+                    }
+
+                    eliminarFotoLocal(materiales[0].foto);
+
+                    return res.status(200).json({
+                        status: "ok",
+                        mensaje: "Material eliminado"
+                    });
+                }
+            );
+        }
+    );
 });
 
 // =====================================================
@@ -1257,7 +1564,7 @@ function mostrarFechaReporte(valor) {
         String(fecha.getHours()).padStart(2, "0");
 
     const minuto =
-        String(fecha.getMinutes()).padStartpadStart(2, "0");
+        String(fecha.getMinutes()).padStart(2, "0");
 
     return `${dia}/${mes}/${anio} ${hora}:${minuto}`;
 }
@@ -1776,6 +2083,32 @@ app.get("/dashboard", (req, res) => {
                 Number(result[0].danados)
         });
     });
+});
+
+// =====================================================
+// ERRORES DE SUBIDA DE IMÁGENES
+// =====================================================
+
+app.use((err, req, res, next) => {
+    if (err instanceof multer.MulterError) {
+        const mensaje = err.code === "LIMIT_FILE_SIZE"
+            ? "La imagen no puede superar los 5 MB"
+            : "No se pudo subir la imagen";
+
+        return res.status(400).json({
+            status: "error",
+            mensaje
+        });
+    }
+
+    if (err) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: err.message || "Error procesando la imagen"
+        });
+    }
+
+    next();
 });
 
 // =====================================================
