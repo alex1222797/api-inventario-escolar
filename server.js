@@ -2086,6 +2086,116 @@ app.get("/dashboard", (req, res) => {
 });
 
 // =====================================================
+// GUÍA 17: HISTORIAL DE PRÉSTAMOS CON FILTROS
+// Filtros opcionales: maestro, material, fecha_inicio y fecha_fin
+// =====================================================
+
+app.get("/historial", (req, res) => {
+    const maestro = req.query.maestro?.toString().trim() || "";
+    const material = req.query.material?.toString().trim() || "";
+    const fechaInicio =
+        req.query.fecha_inicio?.toString().trim() || "";
+    const fechaFin =
+        req.query.fecha_fin?.toString().trim() || "";
+
+    const formatoFecha = /^\d{4}-\d{2}-\d{2}$/;
+
+    if (fechaInicio && !formatoFecha.test(fechaInicio)) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "fecha_inicio debe usar el formato AAAA-MM-DD"
+        });
+    }
+
+    if (fechaFin && !formatoFecha.test(fechaFin)) {
+        return res.status(400).json({
+            status: "error",
+            mensaje: "fecha_fin debe usar el formato AAAA-MM-DD"
+        });
+    }
+
+    if (fechaInicio && fechaFin && fechaInicio > fechaFin) {
+        return res.status(400).json({
+            status: "error",
+            mensaje:
+                "La fecha inicial no puede ser posterior a la fecha final"
+        });
+    }
+
+    let sql = `
+        SELECT
+            p.id,
+            m.nombre AS material,
+
+            COALESCE(
+                u.usuario,
+                p.maestro,
+                'No especificado'
+            ) AS docente,
+
+            p.fecha_prestamo,
+            p.fecha_devolucion
+
+        FROM prestamos p
+
+        INNER JOIN materiales m
+            ON p.material_id = m.id
+
+        LEFT JOIN usuarios u
+            ON p.docente_id = u.id
+
+        WHERE 1 = 1
+    `;
+
+    const params = [];
+
+    if (maestro) {
+        sql += `
+            AND COALESCE(u.usuario, p.maestro) = ?
+        `;
+        params.push(maestro);
+    }
+
+    if (material) {
+        sql += `
+            AND m.nombre = ?
+        `;
+        params.push(material);
+    }
+
+    if (fechaInicio) {
+        sql += `
+            AND DATE(p.fecha_prestamo) >= ?
+        `;
+        params.push(fechaInicio);
+    }
+
+    if (fechaFin) {
+        sql += `
+            AND DATE(p.fecha_prestamo) <= ?
+        `;
+        params.push(fechaFin);
+    }
+
+    sql += `
+        ORDER BY p.fecha_prestamo DESC, p.id DESC
+    `;
+
+    conexion.query(sql, params, (err, result) => {
+        if (err) {
+            console.error("Error obteniendo historial:", err);
+
+            return res.status(500).json({
+                status: "error",
+                mensaje: "Error al obtener el historial de préstamos"
+            });
+        }
+
+        return res.status(200).json(result);
+    });
+});
+
+// =====================================================
 // ERRORES DE SUBIDA DE IMÁGENES
 // =====================================================
 
